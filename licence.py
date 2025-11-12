@@ -54,6 +54,56 @@ def get_node_type(node_name):
             return 'G'
     return None
 
+def load_nename_categories(category_file_path):
+    """Load NeName categories from Excel file"""
+    try:
+        print(f"📖 Loading NeName categories from: {category_file_path}")
+        category_df = pd.read_excel(category_file_path, engine='openpyxl')
+        
+        # Debug: Print available columns
+        print(f"📋 Available columns in category file: {list(category_df.columns)}")
+        
+        # Create a mapping dictionary for NeName to categories
+        nename_categories = {}
+        
+        # Check if required columns exist
+        required_columns = ['NeName', 'Type', 'Operateur', 'Cell', 'Gen', 'Remarque']
+        missing_columns = [col for col in required_columns if col not in category_df.columns]
+        
+        if missing_columns:
+            print(f"❌ Missing columns in category file: {missing_columns}")
+            print(f"✅ Available columns: {list(category_df.columns)}")
+            return {}
+        
+        for _, row in category_df.iterrows():
+            if pd.isna(row['NeName']):
+                continue
+                
+            nename = str(row['NeName']).strip()
+            nename_categories[nename] = {
+                'Type': row['Type'] if pd.notna(row['Type']) else '',
+                'Operateur': row['Operateur'] if pd.notna(row['Operateur']) else '',
+                'Cell': row['Cell'] if pd.notna(row['Cell']) else '',
+                'Gen': row['Gen'] if pd.notna(row['Gen']) else '',
+                'Remarque': row['Remarque'] if pd.notna(row['Remarque']) else ''
+            }
+        
+        print(f"✅ Loaded categories for {len(nename_categories)} NeNames")
+        
+        # Show some examples
+        print("📝 Sample of loaded categories:")
+        for i, (nename, categories) in enumerate(list(nename_categories.items())[:5]):
+            print(f"   {nename}: {categories}")
+            
+        return nename_categories
+        
+    except Exception as e:
+        print(f"❌ Error loading NeName categories: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+    
+
 
 def should_feature_be_active(activation_rule, node_type, feature_state):
     """
@@ -65,47 +115,80 @@ def should_feature_be_active(activation_rule, node_type, feature_state):
     
     activation_rule = str(activation_rule).lower().strip()
     
-    # Rules that require activation
-    activate_rules = [
-        "a activer sur sites e et x éligibles à la dual-co",
-        "a activer sur les bb configurées en mixed mode",
-        "a activer sur les bb configurées pour supporter mode ess",
-        "a activer sur site x",
-        "a activer sur sites g et x",
-        "a activer pour tests",
-        "a activer au cas par cas",
-        "a activer sur site g en crz",
-        "généralisé en crz",
-        "a installer",
-        "a activer sur sur sites e et x en ztd",
-        "a activer sur sites g et x à partir de"
-    ]
+    # NEW: Split rules by period to handle multiple commands
+    rules = [rule.strip() for rule in activation_rule.split('.') if rule.strip()]
     
-    # Rules that require deactivation
-    deactivate_rules = [
-        "a désactiver sur sites e et x",
-        "ne pas activer",
-        "ne pas activer par défaut"
-    ]
+    # Track decisions for this specific node type
+    node_specific_decisions = []
+    general_decisions = []
     
-    # Check activation rules
-    for rule in activate_rules:
-        if rule in activation_rule:
-            if "site x" in activation_rule and "site g" not in activation_rule:
-                return node_type == 'X'
-            elif "sites g et x" in activation_rule or "site g + x" in activation_rule:
-                return node_type in ['G', 'X']
-            elif "sites e et x" in activation_rule:
-                return node_type in ['E', 'X']
-            elif "site g" in activation_rule and "site x" not in activation_rule:
-                return node_type == 'G'
-            else:
-                return True
+    # Process each rule separately
+    for rule in rules:
+        # Rules that require activation
+        activate_rules = [
+            "a activer sur sites e et x éligibles à la dual-co",
+            "a activer sur les bb configurées en mixed mode",
+            "a activer sur les bb configurées pour supporter mode ess",
+            "a activer sur site x",
+            "a activer sur sites g et x",
+            "a activer pour tests",
+            "a activer au cas par cas",
+            "a activer sur site g en crz",
+            "généralisé en crz",
+            "a installer",
+            "a activer sur sur sites e et x en ztd",
+            "a activer sur sites g et x à partir de"
+        ]
+        
+        # Rules that require deactivation
+        deactivate_rules = [
+            "a désactiver sur sites e et x",
+            "ne pas activer",
+            "ne pas activer par défaut",
+            "ne pas activer sur site g",
+            "ne pas activer sur site e",
+            "ne pas activer sur site x"
+        ]
+        
+        # Check for node-specific activation rules
+        if "a activer sur site x" in rule and node_type == 'X':
+            node_specific_decisions.append(True)
+        elif "a activer sur site g" in rule and node_type == 'G':
+            node_specific_decisions.append(True)
+        elif "a activer sur site e" in rule and node_type == 'E':
+            node_specific_decisions.append(True)
+        elif "a activer sur sites g et x" in rule and node_type in ['G', 'X']:
+            node_specific_decisions.append(True)
+        elif "a activer sur sites e et x" in rule and node_type in ['E', 'X']:
+            node_specific_decisions.append(True)
+            
+        # Check for node-specific deactivation rules
+        elif "ne pas activer sur site x" in rule and node_type == 'X':
+            node_specific_decisions.append(False)
+        elif "ne pas activer sur site g" in rule and node_type == 'G':
+            node_specific_decisions.append(False)
+        elif "ne pas activer sur site e" in rule and node_type == 'E':
+            node_specific_decisions.append(False)
+            
+        # Check general activation rules (apply to all nodes)
+        elif any(activate_rule in rule for activate_rule in activate_rules):
+            # Only apply if it's a general rule (not node-specific)
+            if not any(specific in rule for specific in ["site x", "site g", "site e", "sites g et x", "sites e et x"]):
+                general_decisions.append(True)
+                
+        # Check general deactivation rules (apply to all nodes)
+        elif any(deactivate_rule in rule for deactivate_rule in deactivate_rules):
+            # Only apply if it's a general rule (not node-specific)
+            if not any(specific in rule for specific in ["site x", "site g", "site e"]):
+                general_decisions.append(False)
     
-    # Check deactivation rules
-    for rule in deactivate_rules:
-        if rule in activation_rule:
-            return False
+    # Priority: node-specific decisions override general decisions 
+    if node_specific_decisions:
+        # Return the last node-specific decision (most recent one)
+        return node_specific_decisions[-1]
+    elif general_decisions:
+        # Return the last general decision
+        return general_decisions[-1]
     
     # Special case for n/a
     if "n/a" in activation_rule:
@@ -132,8 +215,23 @@ def validate_feature_state(activation_rule, node_type, actual_feature_state):
     else:
         return "INCORRECT"
 
+# Get NeName category file path
+print("📁 Please provide the NeName category Excel file (Type_Site_ENM.xlsx)")
+category_file = input("Enter path to NeName category Excel file: ").strip()
+category_path = try_open_excel(category_file)
+
+if category_path is None:
+    print(f"❌ NeName category file not found: {category_file}")
+    raise SystemExit
+
+# Load NeName categories
+nename_categories = load_nename_categories(category_path)
+if not nename_categories:
+    print("❌ Failed to load NeName categories. Please check the file format.")
+    raise SystemExit
 
 # Get parameter file path
+print("\n📁 Please provide the parameter Excel file")
 param_file = input("Enter path to parameter Excel file (updated file with Features + Licenses sheet): ").strip()
 param_path = try_open_excel(param_file)
 
@@ -160,6 +258,7 @@ if not is_valid_excel_file(data_path):
 
 print(f"📁 Parameter file: {param_path}")
 print(f"📁 Data file: {data_path}")
+print(f"📁 NeName category file: {category_path}")
 
 # Load parameter workbook
 try:
@@ -185,7 +284,7 @@ print(f"📋 Columns in Features + Licenses sheet: {features_header}")
 features_col_idx_map = {name: idx + 1 for idx, name in enumerate(features_header) if name is not None}
 
 # Check required columns in Features + Licenses file
-required_features_columns = ["Feature name", "Bytel nodes", "FeatureState", "A activer ou pas pour Bytel"]
+required_features_columns = ["Feature name", "Bytel nodes", "BB / DU supported", "FeatureState", "A activer ou pas pour Bytel"]
 
 missing_columns = []
 for col in required_features_columns:
@@ -200,6 +299,7 @@ if missing_columns:
 features_data = []
 feature_name_col = features_col_idx_map["Feature name"]
 feature_state_col = features_col_idx_map["FeatureState"]
+feature_supported_col = features_col_idx_map["BB / DU supported"]
 activate_col = features_col_idx_map["A activer ou pas pour Bytel"]
 nodes_bytel = features_col_idx_map["Bytel nodes"]
 
@@ -210,6 +310,7 @@ for row in range(2, features_ws.max_row + 1):
     feature_state = features_ws.cell(row=row, column=feature_state_col).value
     activate = features_ws.cell(row=row, column=activate_col).value
     nodes = features_ws.cell(row=row, column=nodes_bytel).value
+    supported = features_ws.cell(row=row, column=feature_supported_col).value
 
     if feature_name is not None and str(feature_name).strip() != "":
         feature_clean = str(feature_name).strip()
@@ -218,7 +319,8 @@ for row in range(2, features_ws.max_row + 1):
             "Feature name": feature_clean,
             "FeatureState": feature_state,
             "A activer ou pas pour Bytel": activate,
-            "Bytel nodes": nodes
+            "Bytel nodes": nodes,
+            "BB / DU supported" : supported
         })
 
 print(f"✅ Collected {len(features_data)} features from Features + Licenses sheet")
@@ -261,6 +363,7 @@ for feature_info in features_data:
     feature_state_id = feature_info["FeatureState"]  # This is what we search for in data file
     activate_for_bytel = feature_info["A activer ou pas pour Bytel"]
     nodes_for_bytel = feature_info["Bytel nodes"]
+    feature_supported = feature_info["BB / DU supported"]
 
     # Search for this FeatureState in the data file's featureStateId column
     matching_rows = data_df[data_df["featureStateId"] == feature_state_id]
@@ -275,15 +378,23 @@ for feature_info in features_data:
             # Get node type and validate
             node_type = get_node_type(site_name)
             validation_status = validate_feature_state(activate_for_bytel, node_type, actual_feature_state)
+            category_info = nename_categories.get(str(site_name).strip(), {})
             
             output_row = {
                 "Feature name": feature_name,
                 "FeatureState": feature_state_id,
                 "Bytel nodes": nodes_for_bytel,
+                "BB / DU supported" : feature_supported,
                 "A activer ou pas pour Bytel": activate_for_bytel,
                 "NeName": site_name,
                 "featureState": actual_feature_state,
                 "serviceState": service_state,
+                "NodeType": node_type,
+                "Type": category_info.get('Type', ''),
+                "Operateur": category_info.get('Operateur', ''),
+                "Cell": category_info.get('Cell', ''),
+                "Gen": category_info.get('Gen', ''),
+                "Remarque": category_info.get('Remarque', ''),
                 "Validation": validation_status
             }
             
@@ -298,10 +409,17 @@ for feature_info in features_data:
             "Feature name": feature_name,
             "FeatureState": feature_state_id,
             "Bytel nodes": nodes_for_bytel,
+            "BB / DU supported" : feature_supported,
             "A activer ou pas pour Bytel": activate_for_bytel,
             "NeName": "NOT FOUND",
             "featureState": "NOT FOUND",
             "serviceState": "NOT FOUND",
+            "NodeType": "NOT FOUND",
+            "Type": "NOT FOUND",
+            "Operateur": "NOT FOUND",
+            "Cell": "NOT FOUND",
+            "Gen": "NOT FOUND",
+            "Remarque": "NOT FOUND",
             "Validation": "NOT FOUND"
         }
         output_data.append(output_row)
@@ -330,8 +448,9 @@ try:
     ws_main = wb.create_sheet("License_Validation")
 
     # Write headers for main sheet
-    main_headers = ["Feature name", "FeatureState", "Bytel nodes", "A activer ou pas pour Bytel",
-                    "NeName", "featureState", "serviceState", "Validation"]
+    main_headers = ["Feature name", "FeatureState", "Bytel nodes", "BB / DU supported", "A activer ou pas pour Bytel",
+                    "NeName", "featureState", "serviceState", "NodeType", "Type", "Operateur", 
+                            "Cell", "Gen", "Remarque", "Validation"]
 
     for col_idx, header in enumerate(main_headers, 1):
         ws_main.cell(row=1, column=col_idx, value=header)
@@ -360,7 +479,7 @@ try:
         if row_data["Feature name"] != current_feature:
             # If we were tracking a previous feature, merge its cells
             if current_feature is not None and merge_start_row < row_idx - 1:
-                for col in range(1, 4):  # Merge columns A to C (Feature name, FeatureState, A activer ou pas)
+                for col in range(1, 5):  # Merge columns A to C (Feature name, FeatureState, A activer ou pas)
                     ws_main.merge_cells(start_row=merge_start_row, start_column=col,
                                         end_row=row_idx - 1, end_column=col)
 
@@ -379,8 +498,9 @@ try:
     
     if len(incorrect_df) > 0:
         # Write headers for incorrect sheet
-        incorrect_headers = ["Feature name", "FeatureState", "Bytel nodes", "A activer ou pas pour Bytel",
-                            "NeName", "featureState", "serviceState", "Validation"]
+        incorrect_headers = ["Feature name", "FeatureState", "Bytel nodes", "BB / DU supported", "A activer ou pas pour Bytel",
+                            "NeName", "featureState", "serviceState", "NodeType", "Type", "Operateur", 
+                            "Cell", "Gen", "Remarque", "Validation"]
         
         for col_idx, header in enumerate(incorrect_headers, 1):
             ws_incorrect.cell(row=1, column=col_idx, value=header)
