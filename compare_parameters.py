@@ -11,7 +11,9 @@ if choice == "NRCELLCU":
 elif choice == "NRCELLDU":
     SHEET_NAME2 = "NRCellDU" # sheet to read (you said this name)
 PARAM_COL_NAME = "Parameter" # exact header name for parameter column
-COLUMNS_TO_COMPARE = ["lock / unlock", "Valeur par défaut RBS", "Valeur Bytel TDD MidBand", "Valeur Bytel FDD ESS 15MHz", "Valeur Bytel TDD+FDD co-node\nAppliquer la valeur commune si valeur TDD et FDD sont même, sinon appliquer la valeur spécifiée dans cette colonne.", "Valeur Bytel TDD HigBand", "Commentaire", "Delta 25.Q1 E//", "Comment 25.Q1 E//", "Delta 25.Q2 E//", "Comment 25.Q2 E//"] # add any other exact column names
+COLUMNS_TO_COMPARE = ["lock / unlock", "Valeur par défaut RBS", "Valeur Bytel TDD MidBand", "Valeur Bytel FDD ESS 15MHz", 
+                      "Valeur Bytel TDD+FDD co-node\nAppliquer la valeur commune si valeur TDD et FDD sont même, sinon appliquer la valeur spécifiée dans cette colonne.", 
+                      "Valeur Bytel TDD HigBand", "Commentaire", "Delta 25.Q1 E//", "Comment 25.Q1 E//", "Delta 25.Q2 E//", "Comment 25.Q2 E//"] # add any other exact column names
 # -----------------------------
 
 def try_open_excel(path):
