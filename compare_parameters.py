@@ -17,7 +17,7 @@ COLUMNS_TO_COMPARE = ["lock / unlock", "Valeur par défaut RBS", "Valeur Bytel T
 # -----------------------------
 
 def try_open_excel(path):
-# try as given, otherwise try common extensions
+    # try as given, otherwise try common extensions
     candidates = [path]
     if not os.path.splitext(path)[1]:
         candidates += [path + ext for ext in (".xlsx", ".xls", ".xlsm")]
@@ -26,9 +26,38 @@ def try_open_excel(path):
             return p
     return None
 
-old_file = input("Enter path to OLD Excel file: ").strip()
-new_file = input("Enter path to UPDATED Excel file: ").strip()
-param_list_file = input("Enter path to parameter list TXT file: ").strip()
+def find_new_parameters_from_lab(old_file_path, lab_param_file_path, param_column_name):
+    """
+    Compare LAB parameters with OLD file parameters and return parameters that exist in LAB but not in OLD file.
+    """
+    try:
+        # Read OLD file parameters
+        old_df = pd.read_excel(old_file_path, sheet_name=SHEET_NAME2, engine="openpyxl")
+        old_df[param_column_name] = old_df[param_column_name].astype(str).str.strip()
+        old_params_set = set(old_df[param_column_name].str.lower())
+        
+        # Read LAB parameters file
+        with open(lab_param_file_path, "r", encoding="utf-8") as f:
+            lab_params = [line.strip() for line in f if line.strip()]
+        
+        # Find parameters in LAB but not in OLD
+        missing_in_old = []
+        for lab_param in lab_params:
+            lab_param_clean = lab_param.strip()
+            lab_param_lower = lab_param_clean.lower()
+            
+            if lab_param_lower not in old_params_set:
+                missing_in_old.append(lab_param_clean)
+        
+        return missing_in_old
+        
+    except Exception as e:
+        print(f"❌ Error comparing with LAB parameters: {e}")
+        return []
+
+old_file = input("Enter path to Excel file VRTO : ").strip()
+new_file = input("Enter path to Excel file LTE + NR : ").strip()
+param_list_file = input("Enter path to parameter list TXT file from Excel file: ").strip()
 
 old_path = try_open_excel(old_file)
 new_path = try_open_excel(new_file)
@@ -39,7 +68,6 @@ if old_path is None:
 if new_path is None:
     print(f"❌ UPDATED file not found. Tried: {new_file} and common extensions (.xlsx/.xls/.xlsm).")
     raise SystemExit
-
 
 # Read sheet by name
 try:
@@ -103,7 +131,7 @@ for p in parameters:
         new_val = new_lookup.at[p, col]
         if isinstance(new_val, pd.Series):
             new_val = new_val.iloc[0]
-# normalize NaN vs None
+        # normalize NaN vs None
         if pd.isna(old_val) and pd.isna(new_val):
             continue
         if (pd.isna(old_val) and not pd.isna(new_val)) or (pd.isna(new_val) and not pd.isna(old_val)) or (old_val != new_val):
@@ -121,7 +149,7 @@ for p in parameters:
     old_index_set = set(old_lookup.index.str.strip().str.lower())
     new_index_set = set(new_lookup.index.str.strip().str.lower())
     
-    if p_lower in new_index_set and p_lower not in old_index_set :
+    if p_lower in new_index_set and p_lower not in old_index_set:
         new_only.append({"Parameter": p})
 
 # Print summary
@@ -149,7 +177,6 @@ if new_only:
 for col in COLUMNS_TO_COMPARE:
     if col in old_df.columns:
         old_df[col] = old_df[col].astype(object)
-
 
 # Load the workbook and target sheet
 wb = load_workbook(old_path)
@@ -179,8 +206,8 @@ for row in range(2, ws.max_row + 1):
     if param_value is None:
         continue
     param_value_str = str(param_value).strip()
-
-# Check if this parameter has a difference
+    
+    # Check if this parameter has a difference
     for diff in differences:
         if diff["Parameter"].strip() == param_value_str:
             col_idx = col_idx_map[diff["Column"]]
@@ -188,15 +215,38 @@ for row in range(2, ws.max_row + 1):
             existing_comment = cell.comment
             cell.value = diff["New Value"]
             cell.fill = purple_fill
-            if existing_comment :
+            if existing_comment:
                 cell.comment = existing_comment
-# Only overwrite the differing cell
-            break # done with this row
-
+            # Only overwrite the differing cell
+            break  # done with this row
 
 # Save workbook in-place
 wb.save(old_path)
 print(f"\n✅ OLD Excel updated in place — only differing cells in {COLUMNS_TO_COMPARE} updated.")
 
+# Ask user if they want to check for new parameters from LAB
+print("\n" + "="*60)
+check_lab = input("\nDo you want to check for new parameters from LAB? (yes/no): ").strip().lower()
 
+if check_lab in ['yes', 'y', 'oui', 'o']:
+    lab_param_file = input("Enter path to LAB parameter list TXT file: ").strip()
+    
+    if os.path.exists(lab_param_file):
+        print("\n🔍 Checking for parameters in LAB that are not in OLD file...")
+        
+        # Find parameters that exist in LAB but not in OLD file
+        missing_in_old = find_new_parameters_from_lab(old_path, lab_param_file, PARAM_COL_NAME)
+        
+        if missing_in_old:
+            print(f"\n📋 Found {len(missing_in_old)} parameters in LAB that are NOT in OLD file:")
+            print("-" * 80)
+            for i, param in enumerate(missing_in_old, 1):
+                print(f"{i:3}. {param}")
+            print("-" * 80)
 
+        else:
+            print("\n✅ All LAB parameters are already present in the OLD file.")
+    else:
+        print(f"❌ LAB parameter file not found: {lab_param_file}")
+
+print("\n🎯 Script execution completed!")
