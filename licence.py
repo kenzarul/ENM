@@ -75,26 +75,36 @@ def load_nename_categories(category_file_path):
             print(f"✅ Available columns: {list(category_df.columns)}")
             return {}
         
+        # Check if dual-co column exists
+        dual_co_column = None
+        for col in category_df.columns:
+            if 'dual' in str(col).lower() and 'co' in str(col).lower():
+                dual_co_column = col
+                break
+        
         for _, row in category_df.iterrows():
             if pd.isna(row['NeName']):
                 continue
                 
             nename = str(row['NeName']).strip()
-            nename_categories[nename] = {
+            category_info = {
                 'Type': row['Type'] if pd.notna(row['Type']) else '',
                 'Operateur': row['Operateur'] if pd.notna(row['Operateur']) else '',
                 'Cell': row['Cell'] if pd.notna(row['Cell']) else '',
                 'Gen': row['Gen'] if pd.notna(row['Gen']) else '',
                 'Remarque': row['Remarque'] if pd.notna(row['Remarque']) else ''
             }
+            
+            # Add dual-co information if column exists
+            if dual_co_column:
+                category_info['DualCo'] = row[dual_co_column] if pd.notna(row[dual_co_column]) else ''
+            else:
+                category_info['DualCo'] = ''
+            
+            nename_categories[nename] = category_info
         
         print(f"✅ Loaded categories for {len(nename_categories)} NeNames")
         
-        # Show some examples
-        print("📝 Sample of loaded categories:")
-        for i, (nename, categories) in enumerate(list(nename_categories.items())[:5]):
-            print(f"   {nename}: {categories}")
-            
         return nename_categories
         
     except Exception as e:
@@ -105,53 +115,115 @@ def load_nename_categories(category_file_path):
     
 
 
-def should_feature_be_active(activation_rule, node_type, feature_state):
+def should_feature_be_active(activation_rule, node_type, actual_feature_state, feature_supported, site_gen, site_type, site_cell, site_dual_co):
     """
-    Determine if feature should be active based on activation rule and node type
+    Determine if feature should be active based on activation rule, node type, Gen compatibility, Type, Cell and DualCo configuration
     Returns: True if should be active, False if should be inactive, None if rule doesn't apply
     """
     if not activation_rule or not node_type:
         return None
     
     activation_rule = str(activation_rule).lower().strip()
+    feature_supported_str = str(feature_supported).lower().strip() if feature_supported else ""
+    site_gen_str = str(site_gen).lower().strip() if site_gen else ""
+    site_type_str = str(site_type).lower().strip() if site_type else ""
+    site_cell_str = str(site_cell).lower().strip() if site_cell else ""
+    site_dual_co_str = str(site_dual_co).lower().strip() if site_dual_co else ""
     
-    # NEW: Split rules by period to handle multiple commands
+    # PRIORITY 1: Check Gen compatibility first (overrides everything)
+    if feature_supported_str and site_gen_str:
+        # Case: Feature only supports Gen3+ (includes Gen3, Gen4, etc.)
+        if ("gen3+" in feature_supported_str or "gen3+=" in feature_supported_str) and "gen2" in site_gen_str:
+            return False
+        # Case: Feature only supports Gen3 (exactly Gen3, not Gen4)
+        elif "gen3" in feature_supported_str and "gen4" in site_gen_str and "gen3+" not in feature_supported_str and "gen3+=" not in feature_supported_str:
+            return False
+        # Case: Feature only supports Gen4 and site is Gen2/Gen3
+        elif "gen4" in feature_supported_str and ("gen2" in site_gen_str or "gen3" in site_gen_str):
+            return False
+        # Case: Feature supports Gen2 only and site is Gen3/Gen4
+        elif "gen2" in feature_supported_str and ("gen3" in site_gen_str or "gen4" in site_gen_str):
+            return False
+    
+    # Split rules by period to handle multiple commands
     rules = [rule.strip() for rule in activation_rule.split('.') if rule.strip()]
     
-    # Track decisions for this specific node type
     node_specific_decisions = []
     general_decisions = []
     
     # Process each rule separately
     for rule in rules:
-        # Rules that require activation
-        activate_rules = [
-            "a activer sur sites e et x éligibles à la dual-co",
-            "a activer sur les bb configurées en mixed mode",
-            "a activer sur les bb configurées pour supporter mode ess",
-            "a activer sur site x",
-            "a activer sur sites g et x",
-            "a activer pour tests",
-            "a activer au cas par cas",
-            "a activer sur site g en crz",
-            "généralisé en crz",
-            "a installer",
-            "a activer sur sur sites e et x en ztd",
-            "a activer sur sites g et x à partir de"
-        ]
+        # Handle dual-co specific rules - FIXED LOGIC
+        if "à la dual-co" in rule or "éligibles à la dual-co" in rule:
+            # Check if site has dual-co (non-empty value means it has dual-co)
+            if node_type in ['E', 'X'] and site_dual_co_str and site_dual_co_str != "":
+                node_specific_decisions.append(True)
+            elif node_type in ['E', 'X']:
+                node_specific_decisions.append(False)
+                
+        # Handle complex combined rules first (most specific first)
         
-        # Rules that require deactivation
-        deactivate_rules = [
-            "a désactiver sur sites e et x",
-            "ne pas activer",
-            "ne pas activer par défaut",
-            "ne pas activer sur site g",
-            "ne pas activer sur site e",
-            "ne pas activer sur site x"
-        ]
+        # Rule: "généralisé en CRZ sur site G + X s'il y TDD"
+        elif "généralisé en crz" in rule and "s'il y tdd" in rule and ("site g + x" in rule or "sites g et x" in rule):
+            if node_type in ['G', 'X'] and "crz" in site_type_str and ("tdd" in site_cell_str or "tdd+fdd" in site_cell_str or "tdd + fdd" in site_cell_str):
+                node_specific_decisions.append(True)
+            elif node_type in ['G', 'X']:
+                node_specific_decisions.append(False)
+                
+        # Rule: "A activer sur site G en CRZ"
+        elif "a activer sur site g en crz" in rule:
+            if node_type == 'G' and "crz" in site_type_str:
+                node_specific_decisions.append(True)
+            elif node_type == 'G':
+                node_specific_decisions.append(False)
+                
+        # Rule: "A activer sur site G + X s'il ya TDD"
+        elif "a activer sur site g + x s'il ya tdd" in rule or "a activer sur site g + x s'il y a tdd" in rule:
+            if node_type in ['G', 'X'] and ("tdd" in site_cell_str or "tdd+fdd" in site_cell_str or "tdd + fdd" in site_cell_str):
+                node_specific_decisions.append(True)
+            elif node_type in ['G', 'X']:
+                node_specific_decisions.append(False)
+                
+        # Rule: "A activer sur sites E et X en ZTD"
+        elif "a activer sur sites e et x en ztd" in rule:
+            if node_type in ['E', 'X'] and "ztd" in site_type_str:
+                node_specific_decisions.append(True)
+            elif node_type in ['E', 'X']:
+                node_specific_decisions.append(False)
+                
+        # Rule: "A activer sur sites G et X en CRZ"
+        elif "a activer sur sites g et x en crz" in rule:
+            if node_type in ['G', 'X'] and "crz" in site_type_str:
+                node_specific_decisions.append(True)
+            elif node_type in ['G', 'X']:
+                node_specific_decisions.append(False)
+                
+        # Rule: Type-specific rules (CRZ)
+        elif "en crz" in rule and not any(term in rule for term in ["site g", "site x", "site e", "sites g et x", "sites e et x"]):
+            # General CRZ rule (applies to all nodes in CRZ)
+            if "crz" in site_type_str:
+                node_specific_decisions.append(True)
+            else:
+                node_specific_decisions.append(False)
+                
+        # Rule: Type-specific rules (ZTD)
+        elif "en ztd" in rule and not any(term in rule for term in ["site g", "site x", "site e", "sites g et x", "sites e et x"]):
+            # General ZTD rule (applies to all nodes in ZTD)
+            if "ztd" in site_type_str:
+                node_specific_decisions.append(True)
+            else:
+                node_specific_decisions.append(False)
         
-        # Check for node-specific activation rules
-        if "a activer sur site x" in rule and node_type == 'X':
+        # Rule: TDD-specific rules
+        elif ("s'il ya tdd" in rule or "s'il y a tdd" in rule) and not any(term in rule for term in ["site g", "site x", "site e", "sites g et x", "sites e et x"]):
+            # General TDD rule (applies to all nodes with TDD)
+            if "tdd" in site_cell_str or "tdd+fdd" in site_cell_str or "tdd + fdd" in site_cell_str:
+                node_specific_decisions.append(True)
+            else:
+                node_specific_decisions.append(False)
+        
+        # Node-specific activation rules
+        elif "a activer sur site x" in rule and node_type == 'X':
             node_specific_decisions.append(True)
         elif "a activer sur site g" in rule and node_type == 'G':
             node_specific_decisions.append(True)
@@ -162,7 +234,7 @@ def should_feature_be_active(activation_rule, node_type, feature_state):
         elif "a activer sur sites e et x" in rule and node_type in ['E', 'X']:
             node_specific_decisions.append(True)
             
-        # Check for node-specific deactivation rules
+        # Node-specific deactivation rules
         elif "ne pas activer sur site x" in rule and node_type == 'X':
             node_specific_decisions.append(False)
         elif "ne pas activer sur site g" in rule and node_type == 'G':
@@ -170,14 +242,26 @@ def should_feature_be_active(activation_rule, node_type, feature_state):
         elif "ne pas activer sur site e" in rule and node_type == 'E':
             node_specific_decisions.append(False)
             
-        # Check general activation rules (apply to all nodes)
-        elif any(activate_rule in rule for activate_rule in activate_rules):
-            # Only apply if it's a general rule (not node-specific)
-            if not any(specific in rule for specific in ["site x", "site g", "site e", "sites g et x", "sites e et x"]):
+        # General activation rules (apply to all nodes)
+        elif any(activate_rule in rule for activate_rule in [
+            "a activer sur les bb configurées en mixed mode", 
+            "a activer sur les bb configurées pour supporter mode ess",
+            "a activer pour tests",
+            "a activer au cas par cas",
+            "généralisé en crz",  # Only true general cases without specific nodes
+            "a installer",
+            "a activer sur sites g et x à partir de"
+        ]):
+            # Only apply if it's a truly general rule (not combined with other conditions)
+            if not any(specific in rule for specific in ["site x", "site g", "site e", "sites g et x", "sites e et x", "s'il ya tdd", "s'il y a tdd", "en crz", "en ztd", "dual-co"]):
                 general_decisions.append(True)
                 
-        # Check general deactivation rules (apply to all nodes)
-        elif any(deactivate_rule in rule for deactivate_rule in deactivate_rules):
+        # General deactivation rules (apply to all nodes)
+        elif any(deactivate_rule in rule for deactivate_rule in [
+            "a désactiver sur sites e et x",
+            "ne pas activer",
+            "ne pas activer par défaut"
+        ]):
             # Only apply if it's a general rule (not node-specific)
             if not any(specific in rule for specific in ["site x", "site g", "site e"]):
                 general_decisions.append(False)
@@ -197,12 +281,12 @@ def should_feature_be_active(activation_rule, node_type, feature_state):
     return None
 
 
-def validate_feature_state(activation_rule, node_type, actual_feature_state):
+def validate_feature_state(activation_rule, node_type, actual_feature_state, feature_supported, site_gen, site_type, site_cell, site_dual_co):
     """
-    Validate if the actual featureState matches what it should be based on activation rule
+    Validate if the actual featureState matches what it should be based on activation rule, Gen compatibility, Type, Cell and DualCo
     Returns: "CORRECT", "INCORRECT", or "UNKNOWN"
     """
-    expected_active = should_feature_be_active(activation_rule, node_type, actual_feature_state)
+    expected_active = should_feature_be_active(activation_rule, node_type, actual_feature_state, feature_supported, site_gen, site_type, site_cell, site_dual_co)
     
     if expected_active is None:
         return "UNKNOWN"
@@ -354,75 +438,67 @@ incorrect_data = []
 print(f"\n📝 Creating license validation table...")
 
 # Define color fills
-RED_FILL = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")     # Red for incorrect
-YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # Yellow for not found
+YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # Yellow
+YELLOW_FILL2 = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # Yellow for not found
 
 # Process each feature from the parameter file
 for feature_info in features_data:
     feature_name = feature_info["Feature name"]
-    feature_state_id = feature_info["FeatureState"]  # This is what we search for in data file
+    feature_state_id = feature_info["FeatureState"]
     activate_for_bytel = feature_info["A activer ou pas pour Bytel"]
     nodes_for_bytel = feature_info["Bytel nodes"]
     feature_supported = feature_info["BB / DU supported"]
 
-    # Search for this FeatureState in the data file's featureStateId column
     matching_rows = data_df[data_df["featureStateId"] == feature_state_id]
 
     if len(matching_rows) > 0:
-        # FeatureState found in data file
         for _, row in matching_rows.iterrows():
             site_name = row["NeName"]
             actual_feature_state = row["featureState"]
             service_state = row["serviceState"]
             
-            # Get node type and validate
             node_type = get_node_type(site_name)
-            validation_status = validate_feature_state(activate_for_bytel, node_type, actual_feature_state)
             category_info = nename_categories.get(str(site_name).strip(), {})
+            site_gen = category_info.get('Gen', '')
+            site_type = category_info.get('Type', '')
+            site_cell = category_info.get('Cell', '')
+            site_dual_co = category_info.get('DualCo', '')  # Get dual-co information
+            
+            # Pass all information to validation including dual-co
+            validation_status = validate_feature_state(
+                activate_for_bytel, 
+                node_type, 
+                actual_feature_state, 
+                feature_supported, 
+                site_gen,
+                site_type,
+                site_cell,
+                site_dual_co  # Pass dual-co information
+            )
             
             output_row = {
                 "Feature name": feature_name,
                 "FeatureState": feature_state_id,
                 "Bytel nodes": nodes_for_bytel,
-                "BB / DU supported" : feature_supported,
+                "BB / DU supported": feature_supported,
                 "A activer ou pas pour Bytel": activate_for_bytel,
                 "NeName": site_name,
                 "featureState": actual_feature_state,
                 "serviceState": service_state,
                 "NodeType": node_type,
-                "Type": category_info.get('Type', ''),
+                "Type": site_type,
                 "Operateur": category_info.get('Operateur', ''),
-                "Cell": category_info.get('Cell', ''),
-                "Gen": category_info.get('Gen', ''),
+                "Cell": site_cell,
+                "Gen": site_gen,
+                "DualCo": site_dual_co,  # Add dual-co column to output
                 "Remarque": category_info.get('Remarque', ''),
                 "Validation": validation_status
             }
             
             output_data.append(output_row)
             
-            # Add to incorrect data if validation failed
             if validation_status == "INCORRECT":
                 incorrect_data.append(output_row)
-    else:
-        # FeatureState not found in data file
-        output_row = {
-            "Feature name": feature_name,
-            "FeatureState": feature_state_id,
-            "Bytel nodes": nodes_for_bytel,
-            "BB / DU supported" : feature_supported,
-            "A activer ou pas pour Bytel": activate_for_bytel,
-            "NeName": "NOT FOUND",
-            "featureState": "NOT FOUND",
-            "serviceState": "NOT FOUND",
-            "NodeType": "NOT FOUND",
-            "Type": "NOT FOUND",
-            "Operateur": "NOT FOUND",
-            "Cell": "NOT FOUND",
-            "Gen": "NOT FOUND",
-            "Remarque": "NOT FOUND",
-            "Validation": "NOT FOUND"
-        }
-        output_data.append(output_row)
 
 # Create output DataFrame
 output_df = pd.DataFrame(output_data)
@@ -450,7 +526,7 @@ try:
     # Write headers for main sheet
     main_headers = ["Feature name", "FeatureState", "Bytel nodes", "BB / DU supported", "A activer ou pas pour Bytel",
                     "NeName", "featureState", "serviceState", "NodeType", "Type", "Operateur", 
-                            "Cell", "Gen", "Remarque", "Validation"]
+                            "Cell", "Gen", "DualCo", "Remarque", "Validation"]
 
     for col_idx, header in enumerate(main_headers, 1):
         ws_main.cell(row=1, column=col_idx, value=header)
@@ -468,8 +544,8 @@ try:
         validation_status = row_data["Validation"]
         if validation_status == "INCORRECT":
             # Highlight columns from NeName to Validation (columns 5 to 8) in red
-            for col in range(5, len(main_headers) + 1):  # Columns 5 to 8
-                ws_main.cell(row=row_idx, column=col).fill = RED_FILL
+            for col in range(6, len(main_headers) + 1):  # Columns 5 to 8
+                ws_main.cell(row=row_idx, column=col).fill = YELLOW_FILL
         elif validation_status == "NOT FOUND":
             # Highlight columns from NeName to Validation (columns 5 to 8) in yellow for not found
             for col in range(5, len(main_headers) + 1):  # Columns 5 to 8
@@ -500,7 +576,7 @@ try:
         # Write headers for incorrect sheet
         incorrect_headers = ["Feature name", "FeatureState", "Bytel nodes", "BB / DU supported", "A activer ou pas pour Bytel",
                             "NeName", "featureState", "serviceState", "NodeType", "Type", "Operateur", 
-                            "Cell", "Gen", "Remarque", "Validation"]
+                            "Cell", "Gen", "DualCo", "Remarque", "Validation"]
         
         for col_idx, header in enumerate(incorrect_headers, 1):
             ws_incorrect.cell(row=1, column=col_idx, value=header)
@@ -511,8 +587,8 @@ try:
                 ws_incorrect.cell(row=row_idx, column=col_idx, value=row_data[header])
             
             # Highlight columns from NeName to Validation (columns 5 to 8) in red for incorrect entries
-            for col in range(5, len(incorrect_headers) + 1):  # Columns 5 to 8
-                ws_incorrect.cell(row=row_idx, column=col).fill = RED_FILL
+            for col in range(6, len(incorrect_headers) + 1):  # Columns 5 to 8
+                ws_incorrect.cell(row=row_idx, column=col).fill = YELLOW_FILL
     else:
         ws_incorrect.cell(row=1, column=1, value="No incorrect entries found!")
     
@@ -626,9 +702,9 @@ try:
     # Add legend to main sheet
     legend_row = len(output_df) + 3
     ws_main.cell(row=legend_row, column=1, value="LEGEND:").font = Font(bold=True)
-    ws_main.cell(row=legend_row + 1, column=1, value="❌ RED highlighting").fill = RED_FILL
+    ws_main.cell(row=legend_row + 1, column=1, value="❌ RED highlighting").fill = YELLOW_FILL
     ws_main.cell(row=legend_row + 1, column=2, value="= Incorrect feature state (from NeName to Validation)")
-    ws_main.cell(row=legend_row + 2, column=1, value="🔍 YELLOW highlighting").fill = YELLOW_FILL
+    ws_main.cell(row=legend_row + 2, column=1, value="🔍 YELLOW highlighting").fill = YELLOW_FILL2
     ws_main.cell(row=legend_row + 2, column=2, value="= Feature not found in data file (from NeName to Validation)")
 
     wb.save(output_filename)
@@ -642,25 +718,13 @@ try:
     print(f"📊 Final Summary:")
     print(f"   📋 Total Features: {total_features}")
     print(f"   🏢 Unique Sites: {unique_sites}")
-    print(f"   ✅ CORRECT Feature States: {correct_entries}")
-    print(f"   ❌ INCORRECT Feature States: {incorrect_entries}")
     print(f"   ⚪ UNKNOWN Feature States: {unknown_entries}")
     print(f"   🔍 NOT FOUND Features: {not_found_entries}")
 
     # Print incorrect features if any
-    if incorrect_entries > 0:
-        print(f"\n❌ INCORRECT FEATURE STATES FOUND:")
-        for _, row in incorrect_df.iterrows():
-            print(f"   - {row['Feature name']} on {row['NeName']} (State: {row['featureState']}, Expected: {row['A activer ou pas pour Bytel']})")
+
 
 except Exception as e:
     print(f"❌ Error saving output file: {e}")
     import traceback
     traceback.print_exc()
-
-print(f"\n💡 How it works:")
-print(f"   • Reads 'Feature name', 'FeatureState', 'A activer ou pas pour Bytel' from parameter file")
-print(f"   • Searches for 'FeatureState' value in data file's 'featureStateId' column")
-print(f"   • Validates featureState based on activation rules and node type (E, X, G)")
-print(f"   • Highlights columns from NeName to Validation: RED=incorrect, YELLOW=not found")
-print(f"   • Creates separate sheet with all incorrect entries")
