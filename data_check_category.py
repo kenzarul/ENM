@@ -55,6 +55,28 @@ def get_cell_type(cellname):
         return "unknown"
 
 
+def get_operator_from_cellname(cellname):
+    """Determine operator (BYT/SFR) based on last letter of cell name"""
+    if pd.isna(cellname):
+        return "unknown"
+    
+    cellname_str = str(cellname).strip().upper()
+    
+    if len(cellname_str) == 0:
+        return "unknown"
+    
+    last_letter = cellname_str[-1]
+    
+    # BYT cells end with A/B/C/D/E/F
+    if last_letter in ['A', 'B', 'C', 'D', 'E', 'F']:
+        return "BYT"
+    # SFR cells end with N/O/P/Q/R/S
+    elif last_letter in ['N', 'O', 'P', 'Q', 'R', 'S']:
+        return "SFR"
+    else:
+        return "unknown"
+
+
 def load_nename_categories(category_file_path):
     """Load NeName categories from Excel file"""
     try:
@@ -65,7 +87,7 @@ def load_nename_categories(category_file_path):
         print(f"Available columns categories : {list(category_df.columns)}")
         nename_categories = {}
         
-        required_columns = ['NeName', 'Type', 'Operateur', 'Cell', 'Gen', 'Remarque']
+        required_columns = ['NeName', 'Type', 'Cell', 'Gen', 'Remarque']
         missing_columns = [col for col in required_columns if col not in category_df.columns]
         
         if missing_columns:
@@ -80,7 +102,6 @@ def load_nename_categories(category_file_path):
             nename = str(row['NeName']).strip()
             nename_categories[nename] = {
                 'Type': row['Type'] if pd.notna(row['Type']) else '',
-                'Operateur': row['Operateur'] if pd.notna(row['Operateur']) else '',
                 'Cell': row['Cell'] if pd.notna(row['Cell']) else '',
                 'Gen': row['Gen'] if pd.notna(row['Gen']) else '',
                 'Remarque': row['Remarque'] if pd.notna(row['Remarque']) else ''
@@ -88,10 +109,6 @@ def load_nename_categories(category_file_path):
         
         print(f"✅ Loaded categories for {len(nename_categories)} NeNames")
         
-        # Show some examples
-        print("📝 Sample of loaded categories:")
-        for i, (nename, categories) in enumerate(list(nename_categories.items())[:5]):
-            print(f"   {nename}: {categories}")
             
         return nename_categories
         
@@ -113,7 +130,6 @@ def get_node_type(nename, nename_categories):
     if nename_str in nename_categories:
         category_info = nename_categories[nename_str]
         cell_config = category_info.get('Cell', '')
-        operateur = category_info.get('Operateur', '')
         netype = category_info.get('Type', '')
         
         # First check for TDD+FDD co-nodes
@@ -123,52 +139,34 @@ def get_node_type(nename, nename_categories):
         # Then use the Type column for categorization
         if netype:
             return netype
-        
-        # Fallback to operator-based categorization
-        if "SFR" in operateur:
-            return "SFR"
-        elif "BYT" in operateur:
-            return "BYT"
     
     # Fallback to original logic for unknown NeNames
-    nename_upper = nename_str.upper()
-    
-def extract_main_value(value):
-    """Extract main value before space or ="""
-    if pd.isna(value) or value == "" or is_na_value(value):
-        return None
+    return "unknown"
 
-    value_str = str(value).strip()
 
-    # If value contains space or =, extract the first part
-    if ' ' in value_str or '=' in value_str:
-        # Split by space or = and take the first part
-        parts = re.split(r'[\s=]', value_str)
-        for part in parts:
-            part = part.strip()
-            if part and part != '':  # Skip empty parts
-                return part
-
-    return value_str
-
-def is_boolean_parameter(parameter_name, expected_value):
-    """Determine if this parameter should be treated as boolean"""
-    if pd.isna(expected_value):
+def is_gen2_cell(gen_value):
+    """Check if cell is Gen2 based on Gen column"""
+    if pd.isna(gen_value):
         return False
-        
-    expected_str = str(expected_value).strip().lower()
+    gen_str = str(gen_value).strip().upper()
+    return gen_str == "GEN2" or gen_str == "2" or "GEN2" in gen_str
+
+
+def is_aas_cell(cellname):
+    """Check if cell is an AAS cell (only Q90265A specifically)"""
+    if pd.isna(cellname):
+        return False
     
-    # Check if expected value contains boolean indicators
-    boolean_indicators = ['true', 'false', 'vrai', 'faux', 'oui', 'non']
-    if any(indicator in expected_str for indicator in boolean_indicators):
-        return True
-        
-    # Check parameter name for common boolean parameters
-    boolean_parameters = ['enabled', 'disabled', 'active', 'activate', 'deactivate', 'switch']
-    if any(keyword in parameter_name.lower() for keyword in boolean_parameters):
-        return True
-        
-    return False
+    cellname_str = str(cellname).strip().upper()
+    
+    # Only Q90265A is considered AAS, not all Q...A cells
+    aas_cells = [
+        "Q90265A",
+        # Add more specific AAS cell names here if needed
+    ]
+    
+    return cellname_str in aas_cells
+
 
 def normalize_actual_value(actual_value):
     """Convert only FAUX/VRAI to false/true, handle Python booleans, remove .0 from integers"""
@@ -200,84 +198,55 @@ def normalize_actual_value(actual_value):
     # Keep all other values as they are
     return value_str
 
-def get_expected_value_display(param_info, cell_type):
-    """Get the expected value for display purposes"""
-    if cell_type == "FDD":
-        if not pd.isna(param_info["Valeur Bytel FDD ESS 15MHz"]) and not is_na_value(param_info["Valeur Bytel FDD ESS 15MHz"]):
-            return param_info["Valeur Bytel FDD ESS 15MHz"]
-        elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-            return param_info["Valeur par défaut RBS"]
-        else:
-            return param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"]
-    else:  # TDD or unknown
-        if not pd.isna(param_info["Valeur Bytel TDD MidBand"]) and not is_na_value(param_info["Valeur Bytel TDD MidBand"]):
-            return param_info["Valeur Bytel TDD MidBand"]
-        elif not pd.isna(param_info["Valeur Bytel TDD HigBand"]) and not is_na_value(param_info["Valeur Bytel TDD HigBand"]):
-            return param_info["Valeur Bytel TDD HigBand"]
-        elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-            return param_info["Valeur par défaut RBS"]
-        else:
-            return "No expected value"
 
-def normalize_boolean_value(value):
-    """Convert various boolean representations to standardized true/false"""
+def convert_for_display(value):
+    """Convert for display - ensure true/false are lowercase"""
     if pd.isna(value) or value == "":
-        return None
-
-    value_str = str(value).strip().lower()
-
-    # Handle French boolean values and convert to English true/false
-    if value_str in ['true', '1', 'yes', 'oui', 'on', 'vrai']:
+        return value
+    
+    # Handle Python boolean objects
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    
+    value_str = str(value).strip()
+    
+    # Convert boolean values to lowercase for display
+    if value_str.upper() in ['VRAI', 'TRUE']:
         return "true"
-    elif value_str in ['false', '0', 'no', 'non', 'off', 'faux']:
+    elif value_str.upper() in ['FAUX', 'FALSE']:
         return "false"
-    else:
-        return value_str  # Return as-is for non-boolean values
-
-
-def validate_operator_specific_value(actual_value, expected_value, operateur):
-    """Validate operator-specific values (BYT vs SFR)"""
-    if pd.isna(actual_value) or pd.isna(expected_value):
-        return False
-        
-    actual_normalized = normalize_actual_value(actual_value)
-    expected_str = str(expected_value).strip()
     
-    print(f"🔍 Operator validation: actual='{actual_normalized}', expected='{expected_str}', operateur='{operateur}'")
-    
-    # Handle operator-specific patterns like "BWPSet=1 (BYT) / =11 (SFR)"
-    if "(BYT)" in expected_str and "(SFR)" in expected_str:
-        # Extract BYT and SFR values
-        byt_match = re.search(r'=(\d+)\s*\(BYT\)', expected_str)
-        sfr_match = re.search(r'=(\d+)\s*\(SFR\)', expected_str)
-        
-        if byt_match and sfr_match:
-            byt_value = byt_match.group(1)
-            sfr_value = sfr_match.group(1)
-            
-            # Check based on operator
-            if "BYT" in str(operateur).upper():
-                expected_main = byt_value
-            elif "SFR" in str(operateur).upper():
-                expected_main = sfr_value
-            else:
-                # If operator unknown, use BYT as default
-                expected_main = byt_value
-            
-            print(f"   Operator-specific: BYT={byt_value}, SFR={sfr_value}, using={expected_main}")
-            return actual_normalized == expected_main
-    
-    return False
+    # Keep all other values as they are
+    return value_str
 
 
 def is_na_value(value):
-    """Check if value is N/A, null, empty, or similar - IMPROVED"""
+    """Check if value is N/A, null, empty, or similar"""
     if pd.isna(value) or value == "":
         return True
 
     value_str = str(value).strip().lower()
     na_values = ['n/a', 'null', 'none', 'nan', 'empty', 'vide', '-', 'read-only']
     return value_str in na_values
+
+
+def extract_main_value(value):
+    """Extract main value before space or ="""
+    if pd.isna(value) or value == "" or is_na_value(value):
+        return None
+
+    value_str = str(value).strip()
+
+    # If value contains space or =, extract the first part
+    if ' ' in value_str or '=' in value_str:
+        # Split by space or = and take the first part
+        parts = re.split(r'[\s=]', value_str)
+        for part in parts:
+            part = part.strip()
+            if part and part != '':  # Skip empty parts
+                return part
+
+    return value_str
 
 
 def normalize_parameter_key(key):
@@ -357,7 +326,7 @@ def find_key_value_in_string(search_key, search_value, long_string):
 
     long_str = str(long_string).strip()
 
-    # NEW: Handle the case where the expected value is a simple key=value pair
+    # Handle the case where the expected value is a simple key=value pair
     # and the actual value is a longer path containing that key=value pair
     if "=" in long_str and "," in long_str:
         # This looks like a comma-separated list of key=value pairs
@@ -388,19 +357,257 @@ def find_key_value_in_string(search_key, search_value, long_string):
     return False
 
 
-def detect_validation_pattern(expected_value):
-    """Detect what type of validation pattern the expected value represents - IMPROVED"""
+def validate_cell_local_id(actual_value, cellname):
+    """Custom validation for cellLocalId parameter based on cell name pattern"""
+    if pd.isna(actual_value) or pd.isna(cellname):
+        return False
+    
+    actual_str = str(actual_value).strip()
+    cellname_str = str(cellname).strip().upper()
+    
+    
+    # Define the mapping based on cell name patterns
+    cell_mapping = {
+        # TDD cells (starting with Q)
+        'Q': {
+            'A': '51', 'B': '52', 'C': '53',
+            'D': '151', 'E': '152', 'F': '153', 
+            'N': '72', 'O': '73', 'P': '74',
+            'Q': '172', 'R': '173', 'S': '174'
+        },
+        # FDD cells (starting with Y)  
+        'Y': {
+            'A': '66', 'B': '67', 'C': '68',
+            'D': '166', 'E': '167', 'F': '168',
+            'N': '69', 'O': '70', 'P': '71',
+            'Q': '169', 'R': '170', 'S': '171'
+        }
+    }
+    
+    # Extract the last character (sector identifier)
+    if len(cellname_str) >= 1:
+        cell_prefix = cellname_str[0]  # Q or Y
+        sector_id = cellname_str[-1]   # A, B, C, etc.
+        
+        if cell_prefix in cell_mapping and sector_id in cell_mapping[cell_prefix]:
+            expected_value = cell_mapping[cell_prefix][sector_id]
+            return actual_str == expected_value
+    
+    print(f"   ❌ No mapping found for cellname: '{cellname_str}'")
+    return False
+
+
+def get_expected_cell_local_id(cellname):
+    """Get the expected cellLocalId value for display purposes"""
+    if pd.isna(cellname):
+        return "Unknown"
+    
+    cellname_str = str(cellname).strip().upper()
+    
+    # Define the mapping based on cell name patterns
+    cell_mapping = {
+        'Q': {
+            'A': '51', 'B': '52', 'C': '53',
+            'D': '151', 'E': '152', 'F': '153', 
+            'N': '72', 'O': '73', 'P': '74',
+            'Q': '172', 'R': '173', 'S': '174'
+        },
+        'Y': {
+            'A': '66', 'B': '67', 'C': '68',
+            'D': '166', 'E': '167', 'F': '168',
+            'N': '69', 'O': '70', 'P': '71',
+            'Q': '169', 'R': '170', 'S': '171'
+        }
+    }
+    
+    # Extract the last character (sector identifier)
+    if len(cellname_str) >= 1:
+        cell_prefix = cellname_str[0]  # Q or Y
+        sector_id = cellname_str[-1]   # A, B, C, etc.
+        
+        if cell_prefix in cell_mapping and sector_id in cell_mapping[cell_prefix]:
+            return cell_mapping[cell_prefix][sector_id]
+    
+    return "Unknown mapping"
+
+
+def validate_operator_specific_value(actual_value, expected_value, operateur, cell_type):
+    """Validate operator-specific values (BYT vs SFR) - ENHANCED"""
+    if pd.isna(actual_value) or pd.isna(expected_value):
+        return False
+        
+    actual_normalized = normalize_actual_value(actual_value)
+    expected_str = str(expected_value).strip()
+    
+    
+    # Handle patterns like "BYT = 640320 SFR = 635328" and "BYT = 426990 SFR = 422930"
+    if "BYT" in expected_str.upper() and "SFR" in expected_str.upper():
+        # Extract BYT and SFR values using more flexible patterns
+        byt_match = re.search(r'BYT\s*[=:]\s*(\d+)', expected_str, re.IGNORECASE)
+        sfr_match = re.search(r'SFR\s*[=:]\s*(\d+)', expected_str, re.IGNORECASE)
+        
+        if byt_match and sfr_match:
+            byt_value = byt_match.group(1)
+            sfr_value = sfr_match.group(1)
+            
+            # Check based on operator and cell type
+            if operateur == "BYT":
+                expected_value = byt_value
+            elif operateur == "SFR":
+                expected_value = sfr_value
+            else:
+                # If operator unknown, use BYT as default for TDD, SFR for FDD
+                if cell_type == "TDD":
+                    expected_value = byt_value
+                else:
+                    expected_value = sfr_value
+            
+            return actual_normalized == expected_value
+    
+    # Handle operator-specific patterns like "BWPSet=1 (BYT) / =11 (SFR)"
+    if "(BYT)" in expected_str and "(SFR)" in expected_str:
+        # Extract BYT and SFR values
+        byt_match = re.search(r'=(\d+)\s*\(BYT\)', expected_str)
+        sfr_match = re.search(r'=(\d+)\s*\(SFR\)', expected_str)
+        
+        if byt_match and sfr_match:
+            byt_value = byt_match.group(1)
+            sfr_value = sfr_match.group(1)
+            
+            # Check based on operator
+            if operateur == "BYT":
+                expected_value = byt_value
+            elif operateur == "SFR":
+                expected_value = sfr_value
+            else:
+                # If operator unknown, use BYT as default
+                expected_value = byt_value
+            
+            # For operator-specific values, check if the expected value is contained in the actual value
+            # This handles cases like actual="SubNetwork=...,vsDataBWPSet=1" and expected="1"
+            if expected_value in actual_normalized:
+                return True
+            else:
+                return False
+    
+    return False
+
+
+def validate_type_specific_value(actual_value, expected_value, remarque, operateur, cell_type, param_name):
+    """Validate type-specific values (ZTD, CRZ, etc.) and operator-specific values - FIXED"""
+    if pd.isna(actual_value) or pd.isna(expected_value):
+        return False
+        
+    actual_str = str(actual_value).strip()
+    expected_str = str(expected_value).strip()
+    
+    
+    # Handle multiple type-specific values like "0 = 0dB en ZTD 3 = 3dB en CRZ"
+    if "en ZTD" in expected_str and "en CRZ" in expected_str:
+        # Extract values for both ZTD and CRZ
+        ztd_match = re.search(r'(\d+)\s*=\s*\d+dB\s*en ZTD', expected_str)
+        crz_match = re.search(r'(\d+)\s*=\s*\d+dB\s*en CRZ', expected_str)
+        
+        if ztd_match and crz_match:
+            ztd_value = ztd_match.group(1)
+            crz_value = crz_match.group(1)
+            
+            if "ZTD" in str(remarque) and cell_type == "TDD":
+                print(f"   ZTD TDD site - expecting: '{ztd_value}'")
+                return actual_str == ztd_value
+            elif "CRZ" in str(remarque) and cell_type == "TDD":
+                print(f"   CRZ TDD site - expecting: '{crz_value}'")
+                return actual_str == crz_value
+            else:
+                # For other types, use default value
+                return False
+    
+    # Special handling for raResponseWindow with "en ZTD" pattern
+    if param_name and "raresponsewindow" in param_name.lower() and "en ZTD" in expected_str:
+        if "ZTD" in str(remarque) and cell_type == "TDD":
+            # For ZTD TDD sites, expect the main value (20)
+            main_value = extract_main_value(expected_value)
+            print(f"   ZTD TDD site - expecting: '{main_value}'")
+            return actual_str == main_value
+        else:
+            # For non-ZTD sites or non-TDD cells, use default value
+            return False  # Will be handled by default value logic
+    
+    # Handle type specifications like "0 = 0dB en ZTD" (single type)
+    if "en ZTD" in expected_str:
+        if "ZTD" in str(remarque):
+            # For ZTD sites, expect the main value
+            main_value = extract_main_value(expected_value)
+            print(f"   ZTD site - expecting: '{main_value}'")
+            return actual_str == main_value
+        else:
+            # For non-ZTD sites (like CRZ), check if there's a CRZ-specific value
+            if "CRZ" in str(remarque):
+                # Look for CRZ-specific value in the pattern
+                crz_match = re.search(r'(\d+)\s*=\s*\d+dB\s*en CRZ', expected_str)
+                if crz_match:
+                    crz_value = crz_match.group(1)
+                    print(f"   CRZ site - expecting: '{crz_value}'")
+                    return actual_str == crz_value
+            # Default for non-ZTD when no specific value mentioned
+            return False
+    
+    # Handle type specifications like "3 = 3dB en CRZ" (single type)
+    if "en CRZ" in expected_str:
+        if "CRZ" in str(remarque):
+            # For CRZ sites, expect the main value
+            main_value = extract_main_value(expected_value)
+            print(f"   CRZ site - expecting: '{main_value}'")
+            return actual_str == main_value
+        else:
+            # For non-CRZ sites, check if there's a ZTD-specific value
+            if "ZTD" in str(remarque):
+                # Look for ZTD-specific value in the pattern
+                ztd_match = re.search(r'(\d+)\s*=\s*\d+dB\s*en ZTD', expected_str)
+                if ztd_match:
+                    ztd_value = ztd_match.group(1)
+                    print(f"   ZTD site - expecting: '{ztd_value}'")
+                    return actual_str == ztd_value
+            # Default for non-CRZ when no specific value mentioned
+            return False
+    
+    # Handle other type specifications
+    type_mappings = {
+        "en ZTD": "ZTD",
+        "en CRZ": "CRZ", 
+        "ZTD": "ZTD",
+        "CRZ": "CRZ",
+        "Ran4": "Ran4"
+    }
+    
+    for pattern, type_name in type_mappings.items():
+        if pattern in expected_str:
+            if type_name in str(remarque):
+                main_value = extract_main_value(expected_value)
+                print(f"   {type_name} site - expecting: '{main_value}'")
+                return actual_str == main_value
+            else:
+                # For non-matching types, use main value as default
+                main_value = extract_main_value(expected_value)
+                print(f"   Non-{type_name} site - expecting: '{main_value}'")
+                return actual_str == main_value
+    
+    return False
+
+
+def detect_validation_pattern(expected_value, param_name=""):
+    """Detect what type of validation pattern the expected value represents - ENHANCED"""
     if pd.isna(expected_value) or is_na_value(expected_value):
         return "no_expected_value"
 
     expected_str = str(expected_value).strip()
 
-    # Complex key-value pairs (like EnergyEfficiency=1,EnergyOptPwrAlloc=Default)
-    if "," in expected_str and "=" in expected_str:
-        pairs = [pair.strip() for pair in expected_str.split(",")]
-        if all("=" in pair for pair in pairs):
-            return "key_value_pairs"
-
+    # Operator-specific pattern with BYT/SFR values
+    if ("BYT" in expected_str.upper() and "SFR" in expected_str.upper() and 
+        (re.search(r'BYT\s*[=:]\s*\d+', expected_str, re.IGNORECASE) and 
+         re.search(r'SFR\s*[=:]\s*\d+', expected_str, re.IGNORECASE))):
+        return "operator_specific"
+    
     # Operator-specific pattern (BYT/SFR)
     if "(BYT)" in expected_str and "(SFR)" in expected_str:
         return "operator_specific"
@@ -409,10 +616,22 @@ def detect_validation_pattern(expected_value):
     if "/" in expected_str and ("BYT" in expected_str.upper() or "SFR" in expected_str.upper()):
         return "operator_specific"
 
-    # Type-specific pattern (ZTD, CRZ)
-    type_indicators = ["en ZTD", "en CRZ", "ZTD", "CRZ", "Ran4"]
+    # Type-specific pattern (ZTD, CRZ, etc.) - especially for multiple types like "0 = 0dB en ZTD 3 = 3dB en CRZ"
+    type_indicators = ["en ZTD", "en CRZ", "ZTD", "CRZ", "Ran4", "en SFR"]
     if any(indicator in expected_str for indicator in type_indicators):
-        return "node_specific"
+        # Check if there are multiple type specifications
+        if ("en ZTD" in expected_str and "en CRZ" in expected_str) or \
+           (expected_str.count("en ZTD") > 1) or \
+           (expected_str.count("en CRZ") > 1):
+            return "node_specific_multiple"
+        else:
+            return "node_specific"
+
+    # Complex key-value pairs (like EnergyEfficiency=1,EnergyOptPwrAlloc=Default)
+    if "," in expected_str and "=" in expected_str:
+        pairs = [pair.strip() for pair in expected_str.split(",")]
+        if all("=" in pair for pair in pairs):
+            return "key_value_pairs"
 
     # Value with explanation (e.g., "0 = NO_LOCK", "20 = 20 slots")
     if (" = " in expected_str or " " in expected_str) and len(expected_str.split()) >= 2:
@@ -432,60 +651,9 @@ def detect_validation_pattern(expected_value):
     return "exact_match"
 
 
-def extract_node_specific_value(expected_value, node_type):
-    """Extract value for specific node type from expected value string"""
-    if pd.isna(expected_value) or pd.isna(node_type):
-        return None
-        
-    expected_str = str(expected_value).strip()
-    node_type_upper = node_type.upper()
-    
-    # Check if the expected value contains node-specific information
-    if node_type_upper in expected_str.upper():
-        # Extract the value before the node type specification
-        # Example: "20 = 20slots en ZTD" -> extract "20"
-        parts = expected_str.split()
-        if parts and len(parts) > 0:
-            # Try to extract the first numeric value or boolean
-            main_value = extract_main_value(parts[0])
-            if main_value:
-                return main_value
-                
-    return None
-
-
-def validate_tdd_fdd_co_node_value(actual_value, expected_co_node_value, cell_type):
-    """Validate TDD+FDD co-node values with Profile parameter"""
-    if pd.isna(expected_co_node_value) or is_na_value(expected_co_node_value):
-        return False
-        
-    expected_str = str(expected_co_node_value).strip()
-    actual_str = str(actual_value).strip()
-    
-    # Check for Profile pattern (Profile=0 for TDD, Profile=1 for FDD)
-    if "Profile=" in expected_str:
-        # Extract the expected profile value based on cell type
-        expected_profile = "0" if cell_type == "TDD" else "1"
-        expected_profile_pair = f"Profile={expected_profile}"
-        
-        # Check if the actual value contains the expected profile
-        if expected_profile_pair in actual_str:
-            return True
-            
-        # Also try fuzzy matching for profile
-        if "Profile=" in actual_str:
-            # Extract profile from actual value
-            profile_match = re.search(r'Profile=(\d+)', actual_str)
-            if profile_match:
-                actual_profile = profile_match.group(1)
-                return actual_profile == expected_profile
-    
-    return False
-
-
 def apply_special_validation(expected_value, actual_value, pattern_type, node_type=None, 
-                           expected_co_node_value=None, cell_type=None, operateur=None, remarque=None):
-    """Apply special validation based on the detected pattern - IMPROVED"""
+                           expected_co_node_value=None, cell_type=None, operateur=None, remarque=None, param_name=None):
+    """Apply special validation based on the detected pattern - FIXED"""
     if pd.isna(actual_value) or pd.isna(expected_value) or is_na_value(expected_value):
         return False
 
@@ -493,29 +661,27 @@ def apply_special_validation(expected_value, actual_value, pattern_type, node_ty
     actual_normalized = normalize_actual_value(actual_value)
     expected_normalized = normalize_actual_value(expected_value)
 
-    print(f"🔍 Special validation: pattern='{pattern_type}'")
-    print(f"   Actual: '{actual_normalized}'")
-    print(f"   Expected: '{expected_normalized}'")
-
     if pattern_type == "operator_specific":
-        return validate_operator_specific_value(actual_value, expected_value, operateur)
+        return validate_operator_specific_value(actual_value, expected_value, operateur, cell_type)
+
+    elif pattern_type == "node_specific_multiple":
+        # Handle multiple type-specific values like "0 = 0dB en ZTD 3 = 3dB en CRZ"
+        return validate_type_specific_value(actual_value, expected_value, remarque, operateur, cell_type, param_name)
+
+    elif pattern_type == "node_specific":
+        return validate_type_specific_value(actual_value, expected_value, remarque, operateur, cell_type, param_name)
 
     elif pattern_type == "value_with_explanation":
         main_value = extract_main_value(expected_str)
         main_value_normalized = normalize_actual_value(main_value)
-        print(f"   Main value: '{main_value}' -> '{main_value_normalized}'")
         return actual_normalized == main_value_normalized
 
     elif pattern_type == "key_value_pairs":
         expected_pairs = parse_key_value_pairs(expected_str)
-        print(f"   Expected pairs: {expected_pairs}")
         for exp_key, exp_value in expected_pairs.items():
             exp_value_normalized = normalize_actual_value(exp_value)
             if not find_key_value_in_string(exp_key, exp_value_normalized, actual_normalized):
-                print(f"   ❌ Missing: {exp_key}={exp_value_normalized}")
                 return False
-            else:
-                print(f"   ✅ Found: {exp_key}={exp_value_normalized}")
         return True
 
     elif pattern_type == "single_key_value":
@@ -525,7 +691,6 @@ def apply_special_validation(expected_value, actual_value, pattern_type, node_ty
             exp_value = exp_value.strip()
             exp_value_normalized = normalize_actual_value(exp_value)
             result = find_key_value_in_string(exp_key, exp_value_normalized, actual_normalized)
-            print(f"   Single key-value: {exp_key}={exp_value_normalized} -> {result}")
             return result
         return False
 
@@ -536,34 +701,52 @@ def apply_special_validation(expected_value, actual_value, pattern_type, node_ty
 
     return False
 
-def validate_type_specific_value(actual_value, expected_value, remarque):
-    """Validate type-specific values (ZTD, CRZ, etc.)"""
-    if pd.isna(actual_value) or pd.isna(expected_value):
-        return False
-        
-    actual_str = str(actual_value).strip()
-    expected_str = str(expected_value).strip()
+def get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value, param_name, cellname, operateur):
+    """Get the expected value for display purposes"""
+    # Special handling for cellLocalId
+    if param_name and "celllocalid" in param_name.lower():
+        return get_expected_cell_local_id(cellname)
     
-    # Extract the main value first
-    main_value = extract_main_value(expected_value)
-    if not main_value:
-        return False
-    
-    # Check for type specifications like "en ZTD", "en CRZ"
-    if "en ZTD" in expected_str and "ZTD" in str(remarque):
-        return actual_str == main_value
-    elif "en CRZ" in expected_str and "CRZ" in str(remarque):
-        return actual_str == main_value
-    elif "ZTD" in expected_str and "ZTD" in str(remarque):
-        return actual_str == main_value
-    elif "CRZ" in expected_str and "CRZ" in str(remarque):
-        return actual_str == main_value
-    
-    return False
+    if node_type == "TDD+FDD" and not pd.isna(expected_co_node_value) and not is_na_value(expected_co_node_value):
+        return expected_co_node_value
+    elif cell_type == "FDD":
+        if not pd.isna(param_info["Valeur Bytel FDD ESS 15MHz"]) and not is_na_value(param_info["Valeur Bytel FDD ESS 15MHz"]):
+            return param_info["Valeur Bytel FDD ESS 15MHz"]
+        elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
+            return param_info["Valeur par défaut RBS"]
+        else:
+            return param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"]
+    else:  # TDD or unknown
+        if not pd.isna(param_info["Valeur Bytel TDD MidBand"]) and not is_na_value(param_info["Valeur Bytel TDD MidBand"]):
+            return param_info["Valeur Bytel TDD MidBand"]
+        elif not pd.isna(param_info["Valeur Bytel TDD HigBand"]) and not is_na_value(param_info["Valeur Bytel TDD HigBand"]):
+            return param_info["Valeur Bytel TDD HigBand"]
+        elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
+            return param_info["Valeur par défaut RBS"]
+        else:
+            return "No expected value"
+
+
+# Add this list of parameters to exclude from validation
+EXCLUDED_PARAMETERS = [
+    "endcDlLegSwitchEnabled",
+    "endcDlNrLowQualThresh", 
+    "endcDlNrQualHyst",
+    "endcUlLegSwitchEnabled",
+    "endcUlNrLowQualThresh",
+    "endcUlNrQualHyst",
+    "fddLteCoexistence",
+    "dlRobustLaEnabled",
+    "drxProfileEnabled",
+    "trafficGroupRef",
+    "ulRobustLaEnabled",
+    "nCGI",
+    "nRPCI"
+]
 
 def validate_parameter_value(actual_value, expected_tdd_value, expected_fdd_value, expected_default_value, expected_co_node_value, cell_type,
-                             parameter_name, node_type, operateur, remarque):
-    """Validate if the actual value matches the expected value - FIXED VALUE SELECTION"""
+                             parameter_name, node_type, operateur, remarque, cellname, gen_value):
+    """Validate if the actual value matches the expected value - ENHANCED"""
 
     # Skip validation for administrativeState parameter
     if parameter_name and "administrativestate" in parameter_name.lower():
@@ -572,79 +755,99 @@ def validate_parameter_value(actual_value, expected_tdd_value, expected_fdd_valu
     if parameter_name and "nrtac" in parameter_name.lower():
         return "skipped"
 
-    if pd.isna(actual_value) or actual_value == "":
-        return "no_data"
+    # Skip excluded parameters
+    if parameter_name and parameter_name in EXCLUDED_PARAMETERS:
+        return "skipped"
 
-    # Determine which expected value to use based on cell type - IMPROVED LOGIC
+    # Special handling for Gen2 cells - if all Gen2 cells have empty values, mark as correct
+    if is_gen2_cell(gen_value) and (pd.isna(actual_value) or actual_value == ""):
+        return "correct"
+
+    # Special handling for cellLocalId parameter
+    if parameter_name and "celllocalid" in parameter_name.lower():
+        if pd.isna(actual_value) or actual_value == "":
+            return "no_data"
+        if validate_cell_local_id(actual_value, cellname):
+            return "correct"
+        else:
+            return "incorrect"
+
+    # Special handling for rim parameters - only use TDD value for AAS cells
+    if parameter_name and "rim" in parameter_name.lower() and cell_type == "TDD":
+        if not is_aas_cell(cellname):
+            # For non-AAS TDD cells, use default value instead of TDD value
+            expected_tdd_value = None
+
+    # Determine which expected value to use based on cell type
     expected_value = None
     
-    print(f"🔍 EXPECTED VALUE SELECTION for {parameter_name} (CellType: {cell_type}):")
-    print(f"   TDD Value: '{expected_tdd_value}'")
-    print(f"   FDD Value: '{expected_fdd_value}'") 
-    print(f"   Default Value: '{expected_default_value}'")
-
     # For TDD cells
     if cell_type == "TDD":
         if not pd.isna(expected_tdd_value) and not is_na_value(expected_tdd_value):
             expected_value = expected_tdd_value
-            print(f"   ✅ Using TDD value: '{expected_tdd_value}'")
         elif not pd.isna(expected_default_value) and not is_na_value(expected_default_value):
             expected_value = expected_default_value
-            print(f"   ✅ TDD using default value: '{expected_default_value}'")
+        else:
+            # All expected values are empty/null - expect actual value to also be empty
+            expected_value = ""
     
     # For FDD cells  
     elif cell_type == "FDD":
         if not pd.isna(expected_fdd_value) and not is_na_value(expected_fdd_value):
             expected_value = expected_fdd_value
-            print(f"   ✅ Using FDD value: '{expected_fdd_value}'")
         elif not pd.isna(expected_default_value) and not is_na_value(expected_default_value):
             expected_value = expected_default_value
-            print(f"   ✅ FDD using default value: '{expected_default_value}'")
+        else:
+            # All expected values are empty/null - expect actual value to also be empty
+            expected_value = ""
     
     # For unknown cell types, use default if available
     else:
         if not pd.isna(expected_default_value) and not is_na_value(expected_default_value):
             expected_value = expected_default_value
-            print(f"   ✅ Unknown cell type using default: '{expected_default_value}'")
+        else:
+            # All expected values are empty/null - expect actual value to also be empty
+            expected_value = ""
 
     # For TDD+FDD co-nodes, prioritize the co-node value
     if node_type == "TDD+FDD" and not pd.isna(expected_co_node_value) and not is_na_value(expected_co_node_value):
         expected_value = expected_co_node_value
-        print(f"   ✅ TDD+FDD co-node using: '{expected_co_node_value}'")
 
-    # If no valid expected value found, can't validate
+    # Handle case where all expected values are empty
+    if expected_value == "":
+        if pd.isna(actual_value) or actual_value == "":
+            return "correct"  # Both expected and actual are empty - correct!
+        else:
+            return "incorrect"  # Expected empty but actual has value - incorrect!
+
+    # If no valid expected value found and it's not empty case
     if expected_value is None:
-        print(f"   ❌ No expected value found")
         return "no_expected_value"
+
+    # If actual value is empty but expected has value
+    if pd.isna(actual_value) or actual_value == "":
+        return "incorrect"  # Expected value but actual is empty - incorrect!
 
     # Normalize values
     actual_normalized = normalize_actual_value(actual_value)
     expected_str = str(expected_value).strip()
 
-    print(f"🎯 VALIDATING: param='{parameter_name}'")
-    print(f"   Actual: '{actual_value}' -> normalized: '{actual_normalized}'")
-    print(f"   Expected: '{expected_str}'")
-
     # First, try special validation patterns
-    pattern_type = detect_validation_pattern(expected_value)
-    print(f"   Pattern type: {pattern_type}")
-
+    pattern_type = detect_validation_pattern(expected_value, parameter_name)
+    
     # Handle operator-specific patterns
     if pattern_type == "operator_specific":
-        if validate_operator_specific_value(actual_value, expected_value, operateur):
-            print(f"   ✅ Correct (operator-specific)")
+        if validate_operator_specific_value(actual_value, expected_value, operateur, cell_type):
             return "correct_fuzzy"
     
     # Handle type-specific patterns (ZTD, CRZ, etc.)
     if pattern_type == "node_specific":
-        if validate_type_specific_value(actual_value, expected_value, remarque):
-            print(f"   ✅ Correct (type-specific)")
+        if validate_type_specific_value(actual_value, expected_value, remarque, operateur, cell_type, parameter_name):
             return "correct_fuzzy"
 
     # Try special validation
     if pattern_type != "exact_match" and pattern_type != "no_expected_value":
-        if apply_special_validation(expected_value, actual_value, pattern_type, node_type, expected_co_node_value, cell_type, operateur, remarque):
-            print(f"   ✅ Correct (special validation: {pattern_type})")
+        if apply_special_validation(expected_value, actual_value, pattern_type, node_type, expected_co_node_value, cell_type, operateur, remarque, parameter_name):
             return "correct_fuzzy"
 
     # Method 1: Compare with extracted main value
@@ -652,7 +855,6 @@ def validate_parameter_value(actual_value, expected_tdd_value, expected_fdd_valu
     if expected_main:
         expected_main_normalized = normalize_actual_value(expected_main)
         if actual_normalized == expected_main_normalized:
-            print(f"   ✅ Correct (main value match: '{expected_main}')")
             return "correct_extracted"
 
     # Method 2: Direct comparison
@@ -662,13 +864,11 @@ def validate_parameter_value(actual_value, expected_tdd_value, expected_fdd_valu
         return "correct"
 
     # Method 3: For complex values like "EnergyEfficiency=1,EnergyOptPwrAlloc=Default"
-    # Check if actual value contains the expected key-value pairs
     if "," in expected_str and "=" in expected_str:
         expected_pairs = parse_key_value_pairs(expected_str)
         all_pairs_found = True
         for exp_key, exp_value in expected_pairs.items():
             if not find_key_value_in_string(exp_key, exp_value, actual_normalized):
-                print(f"   ❌ Missing key-value pair: {exp_key}={exp_value}")
                 all_pairs_found = False
                 break
         if all_pairs_found:
@@ -685,31 +885,8 @@ def validate_parameter_value(actual_value, expected_tdd_value, expected_fdd_valu
     except (ValueError, TypeError):
         pass
 
-    print(f"   ❌ Incorrect")
-    print(f"      Actual normalized: '{actual_normalized}'")
-    print(f"      Expected normalized: '{expected_normalized}'")
-    print(f"      Expected main: '{expected_main}'")
     return "incorrect"
 
-def convert_for_display(value):
-    """Convert for display - ensure true/false are lowercase"""
-    if pd.isna(value) or value == "":
-        return value
-    
-    # Handle Python boolean objects
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    
-    value_str = str(value).strip()
-    
-    # Convert boolean values to lowercase for display
-    if value_str.upper() in ['VRAI', 'TRUE']:
-        return "true"
-    elif value_str.upper() in ['FAUX', 'FALSE']:
-        return "false"
-    
-    # Keep all other values as they are
-    return value_str
 
 # Get user choice
 choice = input("Select sheet type (NRCellCU / NRCellDU): ").strip()
@@ -835,6 +1012,11 @@ for row in range(2, param_ws.max_row + 1):
             print(f"⚠️  Skipping nRTAC parameter: {param_clean}")
             continue
 
+        # Skip excluded parameters
+        if param_clean in EXCLUDED_PARAMETERS:
+            print(f"⚠️  Skipping excluded parameter: {param_clean}")
+            continue
+
         # Check if parameter is NOT read-only
         if readonly_value is None or str(readonly_value).strip().lower() != "read-only":
             parameters_to_include.append(param_clean)
@@ -855,23 +1037,19 @@ for row in range(2, param_ws.max_row + 1):
             if SHEET_NAME == "NRCellCU":
                 parameter_data[param_clean]["Valeur Bytel TDD+FDD co-node"] = param_ws.cell(row=row,
                     column=param_col_idx_map["Valeur Bytel TDD+FDD co-node\nAppliquer la valeur commune si valeur TDD et FDD sont même, sinon appliquer la valeur spécifiée dans cette colonne."]).value
-        else:
-            print(f"⚠️  Skipping read-only parameter: {param_clean}")
+
 
 print(f"✅ Collected {len(parameters_to_include)} parameters (excluding read-only and administrativeState and nRTAC)")
 
-# Load data workbook and convert French booleans
+# Load data workbook
 try:
     print(f"\n📖 Loading data workbook...")
     data_df = pd.read_excel(data_path, engine="openpyxl")
-    
                 
 except Exception as e:
     print(f"❌ Error loading data file: {e}")
     raise SystemExit
 
-print(f"📊 Data file shape: {data_df.shape}")
-print(f"📋 Data file columns: {list(data_df.columns)}")
 
 # Check if data file has required columns
 if "CellName" not in data_df.columns:
@@ -889,7 +1067,6 @@ for param in parameters_to_include:
     if param in data_df.columns:
         available_parameters_in_data.append(param)
     else:
-        print(f"⚠️  Parameter '{param}' not found in data file columns")
         missing_parameters_in_data.append(param)
 
 print(f"🔍 Found {len(available_parameters_in_data)} parameters in data file")
@@ -910,7 +1087,6 @@ print(f"\n📝 Creating structured output table with validation...")
 GREEN_FILL = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")  # Light Green
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # Yellow
 VIOLET_FILL = PatternFill(start_color="CBC3E3", end_color="CBC3E3", fill_type="solid")  # Light Purple/Violet
-BLUE_FILL = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")  # Light Blue for special rules
 
 validation_stats = {
     "correct": 0,
@@ -924,41 +1100,43 @@ validation_stats = {
     "skipped": 0
 }
 
-print(f"🔧 Analyzing validation patterns...")
-
+# Process EACH parameter and EACH row individually
 for param in available_parameters_in_data:
     # Get parameter info from parameter file
     param_info = parameter_data[param]
 
-    # Get all unique value-cellname-nename pairs for this parameter
-    value_cellname_nename_pairs = []
-
+    # Process EACH row individually
     for idx, row in data_df.iterrows():
         value = row[param]
         cellname = row['CellName']
         nename = row['NeName']
-        if pd.notna(value) or pd.notna(cellname) or pd.notna(nename):  # Include if any has data
-            value_cellname_nename_pairs.append((value, cellname, nename))
-
-    if value_cellname_nename_pairs:
-        # For the first value, include all parameter info
-        first_value, first_cellname, first_nename = value_cellname_nename_pairs[0]
-        cell_type = get_cell_type(first_cellname)
-        node_type = get_node_type(first_nename, nename_categories)  # Use NeName categories for node type
+        
+        # Skip if all key fields are empty
+        if pd.isna(value) and pd.isna(cellname) and pd.isna(nename):
+            continue
+            
+        cell_type = get_cell_type(cellname)
+        node_type = get_node_type(nename, nename_categories)
         
         # Get category information for this NeName
-        category_info = nename_categories.get(str(first_nename).strip(), {})
+        category_info = nename_categories.get(str(nename).strip(), {})
         
-        # Convert display value for output (double conversion to be safe)
-        display_value = convert_for_display(first_value) 
+        # Use original value without conversion
+        display_value = convert_for_display(value)
         
         # Get co-node value for NRCellCU
         expected_co_node_value = None
         if SHEET_NAME == "NRCellCU":
             expected_co_node_value = param_info.get("Valeur Bytel TDD+FDD co-node")
         
+        # Get Gen value for Gen2 handling
+        gen_value = category_info.get('Gen', '')
+        
+        # Get operator from cell name (last letter)
+        operateur = get_operator_from_cellname(cellname)
+        
         validation = validate_parameter_value(
-            first_value,
+            value,
             param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"],
             param_info["Valeur Bytel FDD ESS 15MHz"],
             param_info["Valeur par défaut RBS"],
@@ -966,21 +1144,23 @@ for param in available_parameters_in_data:
             cell_type,
             param,
             node_type,
-            category_info.get('Operateur', ''), 
-            category_info.get('Remarque', '') 
+            operateur,  # Now using operator from cell name
+            category_info.get('Remarque', ''),
+            cellname,
+            gen_value
         )
 
         validation_stats[validation] += 1
 
-        # Track missing data
+        # Track missing data ONLY if it's truly missing (not empty by design)
         if validation == "no_data":
             missing_data_records.append({
                 "Parameter": param,
-                "CellName": first_cellname,
-                "NeName": first_nename,
+                "CellName": cellname,
+                "NeName": nename,
                 "CellType": cell_type,
                 "Type": category_info.get('Type', ''),
-                "Operateur": category_info.get('Operateur', ''),
+                "Operateur": operateur,  # Using operator from cell name
                 "Cell": category_info.get('Cell', ''),
                 "Gen": category_info.get('Gen', ''),
                 "Remarque": category_info.get('Remarque', ''),
@@ -997,12 +1177,12 @@ for param in available_parameters_in_data:
             "Valeur Bytel TDD MidBand": param_info["Valeur Bytel TDD MidBand"],
             "Valeur Bytel FDD ESS 15MHz": param_info["Valeur Bytel FDD ESS 15MHz"],
             "Valeur Bytel TDD HigBand": param_info["Valeur Bytel TDD HigBand"],
-            "Value": display_value,  # Use converted value
-            "CellName": first_cellname,
-            "NeName": first_nename,
+            "Value": display_value,
+            "CellName": cellname,
+            "NeName": nename,
             "CellType": cell_type,
             "Type": category_info.get('Type', ''),
-            "Operateur": category_info.get('Operateur', ''),
+            "Operateur": operateur,  # Using operator from cell name
             "Cell": category_info.get('Cell', ''),
             "Gen": category_info.get('Gen', ''),
             "Remarque": category_info.get('Remarque', ''),
@@ -1015,29 +1195,8 @@ for param in available_parameters_in_data:
             
         main_output_data.append(output_row)
 
-        # Add to wrong parameters sheet if incorrect
+        # Add to wrong parameters if incorrect
         if validation == "incorrect":
-            # Helper function to get expected value for display
-            def get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value):
-                if node_type == "TDD+FDD" and not pd.isna(expected_co_node_value) and not is_na_value(expected_co_node_value):
-                    return expected_co_node_value
-                elif cell_type == "FDD":
-                    if not pd.isna(param_info["Valeur Bytel FDD ESS 15MHz"]) and not is_na_value(param_info["Valeur Bytel FDD ESS 15MHz"]):
-                        return param_info["Valeur Bytel FDD ESS 15MHz"]
-                    elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-                        return param_info["Valeur par défaut RBS"]
-                    else:
-                        return param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"]
-                else:  # TDD or unknown
-                    if not pd.isna(param_info["Valeur Bytel TDD MidBand"]) and not is_na_value(param_info["Valeur Bytel TDD MidBand"]):
-                        return param_info["Valeur Bytel TDD MidBand"]
-                    elif not pd.isna(param_info["Valeur Bytel TDD HigBand"]) and not is_na_value(param_info["Valeur Bytel TDD HigBand"]):
-                        return param_info["Valeur Bytel TDD HigBand"]
-                    elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-                        return param_info["Valeur par défaut RBS"]
-                    else:
-                        return "No expected value"
-    
             wrong_row = {
                 "Parameter": param,
                 "Valeur par défaut RBS": param_info["Valeur par défaut RBS"],
@@ -1045,142 +1204,21 @@ for param in available_parameters_in_data:
                 "Valeur Bytel FDD ESS 15MHz": param_info["Valeur Bytel FDD ESS 15MHz"],
                 "Valeur Bytel TDD HigBand": param_info["Valeur Bytel TDD HigBand"],
                 "Actual_Value": convert_for_display(value),
-                "Expected_Value": get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value),
+                "Expected_Value": get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value, param, cellname, operateur),
                 "CellName": cellname,
                 "NeName": nename,
                 "CellType": cell_type,
                 "Type": category_info.get('Type', ''),
-                "Operateur": category_info.get('Operateur', ''),
+                "Operateur": operateur,  # Using operator from cell name
                 "Cell": category_info.get('Cell', ''),
                 "Gen": category_info.get('Gen', ''),
                 "Remarque": category_info.get('Remarque', '')
-             }
-    
-            # Add co-node value for NRCellCU
-            if SHEET_NAME == "NRCellCU":
-                wrong_row["Valeur Bytel TDD+FDD co-node"] = expected_co_node_value
-        
-            wrong_parameters_data.append(wrong_row)
-
-        # For subsequent values, keep parameter info blank (will be merged in Excel)
-        for value, cellname, nename in value_cellname_nename_pairs[1:]:
-            cell_type = get_cell_type(cellname)
-            node_type = get_node_type(nename, nename_categories)  # Use NeName categories for node type
-            
-            # Get category information for this NeName
-            category_info = nename_categories.get(str(nename).strip(), {})
-            
-            # Convert display value for output (double conversion to be safe)
-            display_value = convert_for_display(value) 
-            
-            # Get co-node value for NRCellCU
-            expected_co_node_value = None
-            if SHEET_NAME == "NRCellCU":
-                expected_co_node_value = param_info.get("Valeur Bytel TDD+FDD co-node")
-            
-            validation = validate_parameter_value(
-                first_value,
-                param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"],
-                param_info["Valeur Bytel FDD ESS 15MHz"],
-                param_info["Valeur par défaut RBS"],
-                expected_co_node_value,
-                cell_type,
-                param,
-                node_type,
-                category_info.get('Operateur', ''),  
-                category_info.get('Remarque', '') 
-            )
-
-            validation_stats[validation] += 1
-
-            # Track missing data
-            if validation == "no_data":
-                missing_data_records.append({
-                    "Parameter": param,
-                    "CellName": cellname,
-                    "NeName": nename,
-                    "CellType": cell_type,
-                    "Type": category_info.get('Type', ''),
-                    "Operateur": category_info.get('Operateur', ''),
-                    "Cell": category_info.get('Cell', ''),
-                    "Gen": category_info.get('Gen', ''),
-                    "Remarque": category_info.get('Remarque', ''),
-                    "Valeur par défaut RBS": param_info["Valeur par défaut RBS"],
-                    "Valeur Bytel TDD MidBand": param_info["Valeur Bytel TDD MidBand"],
-                    "Valeur Bytel FDD ESS 15MHz": param_info["Valeur Bytel FDD ESS 15MHz"],
-                    "Valeur Bytel TDD HigBand": param_info["Valeur Bytel TDD HigBand"]
-                })
-
-            # Add to main output
-            output_row = {
-                "Parameter": "",  # Blank for merging
-                "Valeur par défaut RBS": "",  # Blank for merging
-                "Valeur Bytel TDD MidBand": "",  # Blank for merging
-                "Valeur Bytel FDD ESS 15MHz": "",  # Blank for merging
-                "Valeur Bytel TDD HigBand": "",  # Blank for merging
-                "Value": display_value,  # Use converted value
-                "CellName": cellname,
-                "NeName": nename,
-                "CellType": cell_type,
-                "Type": category_info.get('Type', ''),
-                "Operateur": category_info.get('Operateur', ''),
-                "Cell": category_info.get('Cell', ''),
-                "Gen": category_info.get('Gen', ''),
-                "Remarque": category_info.get('Remarque', ''),
-                "Validation": validation
             }
             
             # Add co-node value for NRCellCU
             if SHEET_NAME == "NRCellCU":
-                output_row["Valeur Bytel TDD+FDD co-node"] = ""
-                
-            main_output_data.append(output_row)
-
-         # Add to wrong parameters sheet if incorrect
-        if validation == "incorrect":
-            # Helper function to get expected value for display
-            def get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value):
-                if node_type == "TDD+FDD" and not pd.isna(expected_co_node_value) and not is_na_value(expected_co_node_value):
-                    return expected_co_node_value
-                elif cell_type == "FDD":
-                    if not pd.isna(param_info["Valeur Bytel FDD ESS 15MHz"]) and not is_na_value(param_info["Valeur Bytel FDD ESS 15MHz"]):
-                        return param_info["Valeur Bytel FDD ESS 15MHz"]
-                    elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-                        return param_info["Valeur par défaut RBS"]
-                    else:
-                        return param_info["Valeur Bytel TDD MidBand"] or param_info["Valeur Bytel TDD HigBand"]
-                else:  # TDD or unknown
-                    if not pd.isna(param_info["Valeur Bytel TDD MidBand"]) and not is_na_value(param_info["Valeur Bytel TDD MidBand"]):
-                        return param_info["Valeur Bytel TDD MidBand"]
-                    elif not pd.isna(param_info["Valeur Bytel TDD HigBand"]) and not is_na_value(param_info["Valeur Bytel TDD HigBand"]):
-                        return param_info["Valeur Bytel TDD HigBand"]
-                    elif not pd.isna(param_info["Valeur par défaut RBS"]) and not is_na_value(param_info["Valeur par défaut RBS"]):
-                        return param_info["Valeur par défaut RBS"]
-                    else:
-                        return "No expected value"
-    
-            wrong_row = {
-                "Parameter": param,
-                "Valeur par défaut RBS": param_info["Valeur par défaut RBS"],
-                "Valeur Bytel TDD MidBand": param_info["Valeur Bytel TDD MidBand"],
-                "Valeur Bytel FDD ESS 15MHz": param_info["Valeur Bytel FDD ESS 15MHz"],
-                "Valeur Bytel TDD HigBand": param_info["Valeur Bytel TDD HigBand"],
-                "Actual_Value": convert_for_display(value),
-                "Expected_Value": get_display_expected_value(param_info, cell_type, node_type, expected_co_node_value),
-                "CellName": cellname,
-                "NeName": nename,
-                "CellType": cell_type,
-                "Type": category_info.get('Type', ''),
-                "Operateur": category_info.get('Operateur', ''),
-                "Cell": category_info.get('Cell', ''),
-                "Gen": category_info.get('Gen', ''),
-                "Remarque": category_info.get('Remarque', '')
-             }
-    
-            # Add co-node value for NRCellCU
-            if SHEET_NAME == "NRCellCU":
                 wrong_row["Valeur Bytel TDD+FDD co-node"] = expected_co_node_value
-        
+                
             wrong_parameters_data.append(wrong_row)
 
 # Create output DataFrames
@@ -1228,11 +1266,6 @@ print(f"✅ Created main output table with {len(main_output_df)} rows")
 print(f"✅ Created wrong parameters table with {len(wrong_parameters_df)} rows")
 print(f"✅ Created missing data table with {len(missing_data_df)} rows")
 print(f"📊 Validation Statistics:")
-print(f"   ✅ Correct values (exact match): {validation_stats['correct']}")
-print(f"   🤖 Correct values (fuzzy match): {validation_stats['correct_fuzzy']}")
-print(f"   🔵 Correct values (special rules): {validation_stats['correct_special']}")
-print(f"   🔷 Correct values (extracted): {validation_stats['correct_extracted']}")
-print(f"   🔢 Correct values (numeric): {validation_stats['correct_numeric']}")
 print(f"   ⚠️  Incorrect values: {validation_stats['incorrect']}")
 print(f"   💜 No data: {validation_stats['no_data']}")
 print(f"   ❓ No expected value: {validation_stats['no_expected_value']}")
@@ -1274,9 +1307,6 @@ try:
         ws_main.cell(row=1, column=col_idx, value=header)
 
     # Write main data and apply formatting
-    current_param = None
-    merge_start_row = 2
-
     for row_idx, (_, row_data) in enumerate(main_output_df.iterrows(), 2):
         # Write row data
         for col_idx, header in enumerate(main_headers, 1):
@@ -1301,24 +1331,6 @@ try:
             cellname_col = value_col + 1
             ws_main.cell(row=row_idx, column=value_col).fill = fill_color
             ws_main.cell(row=row_idx, column=cellname_col).fill = fill_color
-
-        # Check if this is a new parameter group
-        if row_data["Parameter"] != "":
-            # If we were tracking a previous parameter, merge its cells
-            if current_param is not None and merge_start_row < row_idx - 1:
-                for col in range(1, 6):  # Merge columns A to E
-                    ws_main.merge_cells(start_row=merge_start_row, start_column=col,
-                                        end_row=row_idx - 1, end_column=col)
-
-            # Start tracking new parameter
-            current_param = row_data["Parameter"]
-            merge_start_row = row_idx
-
-    # Merge the last parameter group
-    if current_param is not None and merge_start_row < len(main_output_df) + 1:
-        for col in range(1, 6):  # Merge columns A to E
-            ws_main.merge_cells(start_row=merge_start_row, start_column=col,
-                                end_row=len(main_output_df) + 1, end_column=col)
 
     # Create wrong parameters sheet
     if len(wrong_parameters_df) > 0:
@@ -1348,7 +1360,7 @@ try:
             ws_wrong.cell(row=row_idx, column=actual_value_col).fill = YELLOW_FILL
             ws_wrong.cell(row=row_idx, column=expected_value_col).fill = YELLOW_FILL
 
-    # Create missing data sheet
+    # Create missing data sheet only if there are missing data records
     if len(missing_data_df) > 0:
         ws_missing = wb.create_sheet("Missing_Data")
 
@@ -1392,7 +1404,7 @@ try:
     else:
         ws_summary.cell(row=start_row + 1, column=1, value="All parameters were found in data file")
 
-    # FIXED: Auto-adjust column widths for all sheets with proper handling for merged cells
+    # Auto-adjust column widths for all sheets
     sheets_to_adjust = [ws_main, ws_summary]
     if len(wrong_parameters_df) > 0:
         sheets_to_adjust.append(ws_wrong)
@@ -1430,7 +1442,7 @@ try:
         elif ws == ws_wrong and len(wrong_parameters_df) > 0:
             max_row = len(wrong_parameters_df) + 1
             max_col = len(wrong_headers)
-        elif ws == ws_missing and len(missing_data_df) > 0:
+        elif len(missing_data_df) > 0:
             max_row = len(missing_data_df) + 1
             max_col = len(missing_headers)
         elif ws == ws_summary:
@@ -1465,23 +1477,6 @@ try:
                                                                                 end_color="FFB6C1", fill_type="solid")
     ws_main.cell(row=legend_row + 4, column=2, value="= Skipped (administrativeState and nRTAC)")
 
-    # Add pattern explanations
-    ws_main.cell(row=legend_row + 6, column=1, value="ENHANCED VALIDATION RULES:").font = Font(bold=True)
-    ws_main.cell(row=legend_row + 7, column=1, value="• '14 = 14ms' → '14' is correct (extracts value before space/=)")
-    ws_main.cell(row=legend_row + 8, column=1, value="• '-10 = -10 dBm' → '-10' is correct (handles negative numbers)")
-    ws_main.cell(row=legend_row + 9, column=1,
-                 value="• 'EnergyEfficiency=1' → 'vsDataEnergyEfficiency=1' (fuzzy key matching)")
-    ws_main.cell(row=legend_row + 10, column=1,
-                 value="• 'CgSwitch=Default' → 'SubNetwork=...,vsDataCgSwitch=Default' (path matching)")
-    ws_main.cell(row=legend_row + 11, column=1, value="• '20 = 20slots en ZTD' → '20' for ZTD nodes (node-specific)")
-    if SHEET_NAME == "NRCellCU":
-        ws_main.cell(row=legend_row + 12, column=1, value="• 'Profile=0' for TDD cells, 'Profile=1' for FDD cells in TDD+FDD nodes")
-    ws_main.cell(row=legend_row + 13, column=1, value="• N/A values in expected columns are treated as null")
-    ws_main.cell(row=legend_row + 14, column=1,
-                 value="• administrativeState and nRTAC parameter is skipped from validation")
-    ws_main.cell(row=legend_row + 15, column=1, value="• French 'VRAI/FAUX' converted to English 'true/false'")
-    ws_main.cell(row=legend_row + 16, column=1, value="• Node categorization uses Type_Site_ENM.xlsx file")
-
     wb.save(output_filename)
 
     print(f"🎉 SUCCESS!")
@@ -1493,39 +1488,8 @@ try:
     if len(missing_data_df) > 0:
         print(f"   - Missing_Data: {len(missing_data_df)} missing data records")
     print(f"   - Summary: Overall validation summary")
-    print(f"📊 Final Validation Summary:")
-    print(f"   🟢 {validation_stats['correct']} correct (exact match)")
-    print(f"   🤖 {validation_stats['correct_fuzzy']} correct (fuzzy match)")
-    print(f"   🔵 {validation_stats['correct_special']} correct (special rules)")
-    print(f"   🔷 {validation_stats['correct_extracted']} correct (extracted values)")
-    print(f"   🔢 {validation_stats['correct_numeric']} correct (numeric comparison)")
-    print(f"   🟡 {validation_stats['incorrect']} incorrect")
-    print(f"   🟣 {validation_stats['no_data']} missing data")
-    print(f"   🎀 {validation_stats['skipped']} skipped (administrativeState and nRTAC)")
-
-    # Print parameters not found
-    if missing_parameters_in_data:
-        print(f"\n❌ PARAMETERS NOT FOUND IN DATA FILE:")
-        for param in missing_parameters_in_data:
-            print(f"   - {param}")
 
 except Exception as e:
     print(f"❌ Error saving output file: {e}")
     import traceback
-
     traceback.print_exc()
-
-print(f"\n💡 Enhanced Validation Features:")
-print(f"   • '14 = 14ms' → '14' is now correctly validated")
-print(f"   • '-10 = -10 dBm' → '-10' is now correctly validated")
-print(f"   • 'EnergyEfficiency=1' → 'vsDataEnergyEfficiency=1' (fuzzy key matching)")
-print(f"   • 'CgSwitch=Default' → 'SubNetwork=NR_lte,...,vsDataCgSwitch=Default' (path matching)")
-print(f"   • '20 = 20slots en ZTD' → '20' for ZTD nodes (node-specific validation)")
-if SHEET_NAME == "NRCellCU":
-    print(f"   • 'Profile=0' for TDD cells, 'Profile=1' for FDD cells in TDD+FDD nodes (NEW)")
-print(f"   • N/A values in expected columns are treated as null")
-print(f"   • administrativeState and nRTAC parameter is completely skipped")
-print(f"   • Numeric comparison: 60 vs 60 matches even if different data types")
-print(f"   • French 'VRAI/FAUX' converted to English 'true/false' in output")
-print(f"   • Node type categorization now uses 'Type_Site_ENM.xlsx' file")
-print(f"   • ADDED CATEGORY COLUMNS: Type, Operateur, Cell, Gen, Remarque")
